@@ -1,0 +1,3 @@
+[submodule "MixLoRA"]
+	path = MixLoRA
+	url = https://github.com/TUDB-Labs/MixLoRA.git
