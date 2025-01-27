@@ -1,6 +1,7 @@
 import hashlib
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Tuple
+import json
 
 import torch
 from accelerate.logging import get_logger
@@ -273,6 +274,165 @@ class I2VDatasetWithResize(BaseI2VDataset):
         return self.__image_transforms(image)
 
 
+class I2VDatasetWithActions(I2VDatasetWithResize):
+    """
+    A dataset class for image-to-video generation that:
+      1) Resizes inputs to a fixed dimension (inherited from I2VDatasetWithResize).
+      2) Loads a JSON metadata file containing "actions" for each video.
+    
+    The metadata file is assumed to live under a 'metadata/' directory,
+    with the same filename as the corresponding video, but a '.json' extension.
+    
+    E.g., if a video is:
+        /path/to/videos/myvideo.mp4
+    The metadata file is expected at:
+        /path/to/metadata/myvideo.json
+    
+    The JSON structure is expected to have a top-level key "actions"
+    that is a list of objects, each with:
+        {
+          "dx": <float>,
+          "dy": <float>,
+          "buttons": <list of int>,
+          "keys": <list of str>
+        }
+    
+    As output, __getitem__ returns a dictionary that includes:
+      "actions": A dictionary of Tensors with shapes:
+            "wasd":    (B, T, 4)
+            "space":   (B, T)
+            "shift":   (B, T)
+            "mouse_1": (B, T)
+            "mouse_2": (B, T)
+            "dx":      (B, T)
+            "dy":      (B, T)
+        where B=1 for a single sample, and T is the number of actions loaded.
+    """
+
+    def __getitem__(self, index: int) -> Dict[str, Any]:
+        # First, get the base dictionary from I2VDatasetWithResize
+        data = super().__getitem__(index)
+
+        # The above 'data' dictionary contains:
+        #   {
+        #       "image": image_tensor,
+        #       "prompt_embedding": prompt_embedding_tensor,
+        #       "encoded_video": encoded_video_tensor,
+        #       "video_metadata": {...}
+        #   }
+
+        # Now, load the action metadata:
+        video_path = self.videos[index]  # e.g., /path/to/videos/<name>.mp4
+        metadata_path = self._get_metadata_path(video_path)
+        actions_tensor_dict = self._load_actions_as_tensors(metadata_path)
+
+        data["actions"] = actions_tensor_dict
+        return data
+
+    def _get_metadata_path(self, video_path: Path) -> Path:
+        """
+        Infers the metadata JSON file path from the video file path.
+        For example, changing:
+            /.../videos/<name>.mp4
+        to:
+            /.../metadata/<name>.json
+        """
+        # Example approach:
+        # 1. Start from the parent directory of the videos folder.
+        # 2. Replace "videos" with "metadata" in the path.
+        # 3. Replace the .mp4 extension with .json.
+        #    (you can adjust if your naming pattern is different)
+
+        # parent_of_videos_dir = video_path.parent.parent
+        # metadata_folder = parent_of_videos_dir / "metadata"
+        # same_filename_stem = video_path.stem
+        # return metadata_folder / f"{same_filename_stem}.json"
+
+        # Or a simpler string-based approach if you rely on a fixed structure:
+        # (Be sure to handle the case if the video_path does not follow the pattern.)
+        # This is just an example—adapt it to your dataset layout:
+        return Path(str(video_path).replace("/videos/", "/metadata/").replace(".mp4", ".json"))
+
+    def _load_actions_as_tensors(self, metadata_path: Path) -> Dict[str, torch.Tensor]:
+        """
+        Loads the JSON metadata from `metadata_path` and converts it into Tensors
+        with shapes:
+
+          wasd:    (1, T, 4)
+          space:   (1, T)
+          shift:   (1, T)
+          mouse_1: (1, T)
+          mouse_2: (1, T)
+          dx:      (1, T)
+          dy:      (1, T)
+
+        Returns them as a dict under the key "actions".
+        """
+        if not metadata_path.exists():
+            # If metadata is missing, handle gracefully or raise error
+            raise FileNotFoundError(f"Metadata file not found at {metadata_path}")
+
+        with open(metadata_path, "r") as f:
+            metadata = json.load(f)
+
+        actions = metadata["actions"]  # list of dicts with "dx", "dy", "buttons", "keys"
+        num_actions = len(actions)
+
+        # Prepare empty torch arrays:
+        # (T,) or (T,4), but eventually we add a batch dim => (1,T,...) for the final return
+        wasd = torch.zeros(num_actions, 4, dtype=torch.float)
+        space = torch.zeros(num_actions, dtype=torch.float)
+        shift = torch.zeros(num_actions, dtype=torch.float)
+        mouse_1 = torch.zeros(num_actions, dtype=torch.float)
+        mouse_2 = torch.zeros(num_actions, dtype=torch.float)
+        dx = torch.zeros(num_actions, dtype=torch.float)
+        dy = torch.zeros(num_actions, dtype=torch.float)
+
+        # We'll map 'w','a','s','d' to indices 0..3
+        wasd_map = {'w': 0, 'a': 1, 's': 2, 'd': 3}
+
+        for t, action in enumerate(actions):
+            # dx, dy
+            dx[t] = float(action.get("dx", 0.0))
+            dy[t] = float(action.get("dy", 0.0))
+
+            # keys: e.g. ["w", "shift", "space"]
+            keys = action.get("keys", [])
+            for k in keys:
+                if k in wasd_map:
+                    wasd[t, wasd_map[k]] = 1.0
+                elif k == "space":
+                    space[t] = 1.0
+                elif k == "shift":
+                    shift[t] = 1.0
+                # If you have more keys you care about, add logic here
+
+            # buttons: e.g. [0] or [0,1] or [1] or []
+            buttons = action.get("buttons", [])
+            if 0 in buttons:  # Typically mouse left
+                mouse_1[t] = 1.0
+            if 1 in buttons:  # Typically mouse right
+                mouse_2[t] = 1.0
+
+        # Insert batch dimension of size 1 => (1, T, ...)
+        actions_tensor_dict = {
+            "wasd": wasd.unsqueeze(0),      # (1, T, 4)
+            "space": space.unsqueeze(0),    # (1, T)
+            "shift": shift.unsqueeze(0),    # (1, T)
+            "mouse_1": mouse_1.unsqueeze(0),# (1, T)
+            "mouse_2": mouse_2.unsqueeze(0),# (1, T)
+            "dx": dx.unsqueeze(0),         # (1, T)
+            "dy": dy.unsqueeze(0),         # (1, T)
+        }
+
+        return actions_tensor_dict
+
+
+
+
+
+
+
 class I2VDatasetWithBuckets(BaseI2VDataset):
     def __init__(
         self,
@@ -309,4 +469,4 @@ class I2VDatasetWithBuckets(BaseI2VDataset):
     @override
     def image_transform(self, image: torch.Tensor) -> torch.Tensor:
         return self.__image_transforms(image)
-        
+

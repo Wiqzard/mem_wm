@@ -28,7 +28,7 @@ from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
 
 from finetune.constants import LOG_LEVEL, LOG_NAME
-from finetune.datasets import I2VDatasetWithResize, T2VDatasetWithResize
+from finetune.datasets import I2VDatasetWithResize, T2VDatasetWithResize, I2VDatasetWithActions
 from finetune.datasets.utils import (
     load_images,
     load_prompts,
@@ -170,6 +170,15 @@ class Trainer:
             )
         elif self.args.model_type == "t2v":
             self.dataset = T2VDatasetWithResize(
+                **(self.args.model_dump()),
+                device=self.accelerator.device,
+                max_num_frames=self.state.train_frames,
+                height=self.state.train_height,
+                width=self.state.train_width,
+                trainer=self,
+            )
+        elif self.args.model_type == "wm":
+            self.dataset = I2VDatasetWithActions(
                 **(self.args.model_dump()),
                 device=self.accelerator.device,
                 max_num_frames=self.state.train_frames,

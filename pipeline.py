@@ -21,6 +21,7 @@ from diffusers.utils.torch_utils import randn_tensor
 from diffusers.video_processor import VideoProcessor
 from diffusers.pipelines.cogvideo.pipeline_output import CogVideoXPipelineOutput
 
+from action_encoder import ActionEncoder
 
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
 
@@ -168,6 +169,7 @@ class CogVideoXImageToVideoPipeline(DiffusionPipeline, CogVideoXLoraLoaderMixin)
         "latents",
         "prompt_embeds",
         "negative_prompt_embeds",
+        "action_embeds"
     ]
 
     def __init__(
@@ -176,8 +178,8 @@ class CogVideoXImageToVideoPipeline(DiffusionPipeline, CogVideoXLoraLoaderMixin)
         text_encoder: T5EncoderModel,
         vae: AutoencoderKLCogVideoX,
         transformer: CogVideoXTransformer3DModel,
-        # action_encoder: Optional[ActionEncoderModel] = None,
         scheduler: Union[CogVideoXDDIMScheduler, CogVideoXDPMScheduler],
+        action_encoder: Optional[ActionEncoder] = None,
     ):
         super().__init__()
 
@@ -186,7 +188,7 @@ class CogVideoXImageToVideoPipeline(DiffusionPipeline, CogVideoXLoraLoaderMixin)
             text_encoder=text_encoder,
             vae=vae,
             transformer=transformer,
-            # action_encoder=action_encoder,
+            action_encoder=action_encoder,
             scheduler=scheduler,
         )
         self.vae_scale_factor_spatial = (
@@ -325,6 +327,20 @@ class CogVideoXImageToVideoPipeline(DiffusionPipeline, CogVideoXLoraLoaderMixin)
             )
 
         return prompt_embeds, negative_prompt_embeds
+    
+    def encode_actions(self, actions: Dict[str, Any], uc=False, device=None, dtype=None):
+        B, T = actions["dx"].shape
+        actions = {k: v.to(device, dtype=dtype) for k, v in actions.items()}
+        self.action_encoder.to(device, dtype=dtype)
+        encoded_actions = self.action_encoder(actions)
+        uc_encoded_actions = None 
+        if uc: 
+            dummy_actions = self.action_encoder.get_dummy_input(num_frames=T, batch_size=B)
+            dummy_actions = {k: v.to(device, dtype=dtype) for k, v in dummy_actions.items()}
+            uc_encoded_actions = self.action_encoder(actions, uc=True) 
+        self.action_encoder.cpu()
+        return encoded_actions, uc_encoded_actions
+
 
     def prepare_latents(
         self,
@@ -500,6 +516,11 @@ class CogVideoXImageToVideoPipeline(DiffusionPipeline, CogVideoXLoraLoaderMixin)
                     f" {negative_prompt_embeds.shape}."
                 )
 
+        #if  actions["dx"].shape[1] != num_frames - 1:
+        #    raise ValueError(
+        #        f"Number of frames in actions {T} should be equal to `num_frames - 1` {num_frames - 1}."
+        #    )
+
     # Copied from diffusers.pipelines.cogvideo.pipeline_cogvideox.CogVideoXPipeline.fuse_qkv_projections
     def fuse_qkv_projections(self) -> None:
         r"""Enables fused QKV projections."""
@@ -582,6 +603,7 @@ class CogVideoXImageToVideoPipeline(DiffusionPipeline, CogVideoXLoraLoaderMixin)
         self,
         image: PipelineImageInput,
         prompt: Optional[Union[str, List[str]]] = None,
+        actions: Optional[Dict[str, Any]] = None,
         negative_prompt: Optional[Union[str, List[str]]] = None,
         height: Optional[int] = None,
         width: Optional[int] = None,
@@ -740,6 +762,12 @@ class CogVideoXImageToVideoPipeline(DiffusionPipeline, CogVideoXLoraLoaderMixin)
         )
         if do_classifier_free_guidance:
             prompt_embeds = torch.cat([negative_prompt_embeds, prompt_embeds], dim=0)
+        
+        action_embeds, uc_action_embeds = self.encode_actions(actions, uc=do_classifier_free_guidance, device=device, dtype=prompt_embeds.dtype)
+        if do_classifier_free_guidance:
+            action_embeds = torch.cat([uc_action_embeds, action_embeds], dim=0)
+        
+        prompt_embeds = torch.cat([prompt_embeds, action_embeds], dim=1)
 
         # 4. Prepare timesteps
         timesteps, num_inference_steps = retrieve_timesteps(self.scheduler, num_inference_steps, device, timesteps)

@@ -8,7 +8,8 @@ MODEL_ARGS=(
     --model_path "THUDM/CogVideoX1.5-5B-I2V"
     #--model_name  "cogvideox-i2v"
     --model_name "cogvideox1.5-i2v"  # ["cogvideox-i2v"]
-    --model_type "i2v"
+    #--model_type "i2v"
+    --model_type "wm"
     --training_type "lora"
 )
 
