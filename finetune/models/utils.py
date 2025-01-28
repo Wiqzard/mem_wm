@@ -1,3 +1,4 @@
+import sys
 from typing import Dict, Literal
 
 from finetune.trainer import Trainer
@@ -6,7 +7,7 @@ from finetune.trainer import Trainer
 SUPPORTED_MODELS: Dict[str, Dict[str, Trainer]] = {}
 
 
-def register(model_name: str, training_type: Literal["lora", "sft"], trainer_cls: Trainer):
+def register(model_name: str, training_type: Literal["lora", "sft", "wm"], trainer_cls: Trainer):
     """Register a model and its associated functions for a specific training type.
 
     Args:
@@ -38,7 +39,7 @@ def show_supported_models():
             print(f"  • {training_type}")
 
 
-def get_model_cls(model_type: str, training_type: Literal["lora", "sft"]) -> Trainer:
+def get_model_cls(model_type: str, training_type: Literal["lora", "sft", "wm"]) -> Trainer:
     """Get the trainer class for a specific model and training type."""
     if model_type not in SUPPORTED_MODELS:
         print(f"\nModel '{model_type}' is not supported.")
@@ -53,5 +54,4 @@ def get_model_cls(model_type: str, training_type: Literal["lora", "sft"]) -> Tra
         for supported_type in SUPPORTED_MODELS[model_type]:
             print(f"  • {supported_type}")
         raise ValueError(f"Training type '{training_type}' is not supported for model '{model_type}'")
-
     return SUPPORTED_MODELS[model_type][training_type]

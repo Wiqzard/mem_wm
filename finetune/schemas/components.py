@@ -26,3 +26,6 @@ class Components(BaseModel):
 
     # Scheduler
     scheduler: Any = None
+
+    # Action Encoder
+    action_encoder: Any = None

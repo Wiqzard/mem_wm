@@ -11,13 +11,14 @@ class Args(BaseModel):
     ########## Model ##########
     model_path: Path
     model_name: str
-    model_type: Literal["i2v", "t2v"]
+    model_type: Literal["i2v", "t2v", "wm"]
     training_type: Literal["lora", "sft"] = "lora"
+    encoder_path: Path | None = None
 
     ########## Output ##########
     output_dir: Path = Path("train_results/{:%Y-%m-%d-%H-%M-%S}".format(datetime.datetime.now()))
     report_to: Literal["tensorboard", "wandb", "all"] | None = None
-    tracker_name: str = "finetrainer-cogvideo"
+    tracker_name: str = "gem_inf"
 
     ########## Data ###########
     data_root: Path
@@ -83,6 +84,7 @@ class Args(BaseModel):
     validation_prompts: str | None  # if set do_validation, should not be None
     validation_images: str | None  # if set do_validation and model_type == i2v, should not be None
     validation_videos: str | None  # if set do_validation and model_type == v2v, should not be None
+    validation_actions: str | None  # if set do_validation and model_type == wm, should not be None
     gen_fps: int = 15
 
     #### deprecated args: gen_video_resolution
@@ -115,14 +117,18 @@ class Args(BaseModel):
     def validate_validation_images(cls, v: str | None, info: ValidationInfo) -> str | None:
         values = info.data
         if values.get("do_validation") and values.get("model_type") == "i2v" and not v:
-            raise ValueError("validation_images must be specified when do_validation is True and model_type is i2v")
+            raise ValueError(
+                "validation_images must be specified when do_validation is True and model_type is i2v"
+            )
         return v
 
     @field_validator("validation_videos")
     def validate_validation_videos(cls, v: str | None, info: ValidationInfo) -> str | None:
         values = info.data
         if values.get("do_validation") and values.get("model_type") == "v2v" and not v:
-            raise ValueError("validation_videos must be specified when do_validation is True and model_type is v2v")
+            raise ValueError(
+                "validation_videos must be specified when do_validation is True and model_type is v2v"
+            )
         return v
 
     @field_validator("validation_steps")
@@ -148,7 +154,9 @@ class Args(BaseModel):
             model_name = info.data.get("model_name", "")
             if model_name in ["cogvideox-5b-i2v", "cogvideox-5b-t2v"]:
                 if (height, width) != (480, 720):
-                    raise ValueError("For cogvideox-5b models, height must be 480 and width must be 720")
+                    raise ValueError(
+                        "For cogvideox-5b models, height must be 480 and width must be 720"
+                    )
 
             return v
 
@@ -177,6 +185,8 @@ class Args(BaseModel):
         parser.add_argument("--model_path", type=str, required=True)
         parser.add_argument("--model_name", type=str, required=True)
         parser.add_argument("--model_type", type=str, required=True)
+        parser.add_argument("--encoder_path", type=str, required=False)
+
         parser.add_argument("--training_type", type=str, required=True)
         parser.add_argument("--output_dir", type=str, required=True)
         parser.add_argument("--data_root", type=str, required=True)
@@ -221,7 +231,9 @@ class Args(BaseModel):
         # LoRA parameters
         parser.add_argument("--rank", type=int, default=128)
         parser.add_argument("--lora_alpha", type=int, default=64)
-        parser.add_argument("--target_modules", type=str, nargs="+", default=["to_q", "to_k", "to_v", "to_out.0"])
+        parser.add_argument(
+            "--target_modules", type=str, nargs="+", default=["to_q", "to_k", "to_v", "to_out.0"]
+        )
 
         # Checkpointing
         parser.add_argument("--checkpointing_steps", type=int, default=200)
@@ -229,12 +241,13 @@ class Args(BaseModel):
         parser.add_argument("--resume_from_checkpoint", type=str, default=None)
 
         # Validation
-        parser.add_argument("--do_validation", type=lambda x: x.lower() == 'true', default=False)
+        parser.add_argument("--do_validation", type=lambda x: x.lower() == "true", default=False)
         parser.add_argument("--validation_steps", type=int, default=None)
         parser.add_argument("--validation_dir", type=str, default=None)
         parser.add_argument("--validation_prompts", type=str, default=None)
         parser.add_argument("--validation_images", type=str, default=None)
         parser.add_argument("--validation_videos", type=str, default=None)
+        parser.add_argument("--validation_actions", type=str, default=None)
         parser.add_argument("--gen_fps", type=int, default=15)
 
         args = parser.parse_args()

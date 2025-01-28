@@ -25,5 +25,6 @@ class State(BaseModel):
     validation_prompts: List[str] = []
     validation_images: List[Path | None] = []
     validation_videos: List[Path | None] = []
+    validation_actions: List[str] = []
 
     using_deepspeed: bool = False

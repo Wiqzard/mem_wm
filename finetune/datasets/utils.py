@@ -1,6 +1,7 @@
+import json
 import logging
 from pathlib import Path
-from typing import List, Tuple
+from typing import List, Tuple, Dict
 
 import cv2
 import torch
@@ -24,12 +25,25 @@ def load_prompts(prompt_path: Path) -> List[str]:
 
 def load_videos(video_path: Path) -> List[Path]:
     with open(video_path, "r", encoding="utf-8") as file:
-        return [video_path.parent / line.strip() for line in file.readlines() if len(line.strip()) > 0]
+        return [
+            video_path.parent / line.strip() for line in file.readlines() if len(line.strip()) > 0
+        ]
 
 
 def load_images(image_path: Path) -> List[Path]:
     with open(image_path, "r", encoding="utf-8") as file:
-        return [image_path.parent / line.strip() for line in file.readlines() if len(line.strip()) > 0]
+        return [
+            image_path.parent / line.strip() for line in file.readlines() if len(line.strip()) > 0
+        ]
+
+
+def load_actions(video_path: Path) -> List[str]:
+    with open(video_path, "r", encoding="utf-8") as file:
+        return [
+            Path(str(video_path.parent / line.strip()).replace("videos/", "metadata/").replace(".mp4", ".json"))
+            for line in file.readlines()
+            if len(line.strip()) > 0
+        ]
 
 
 def load_images_from_videos(videos_path: List[Path]) -> List[Path]:
@@ -142,6 +156,83 @@ def preprocess_video_with_resize(
         return frames
 
 
+def load_actions_as_tensors(metadata_path: Path, num_actions: int) -> Dict[str, torch.Tensor]:
+    """
+    Loads the JSON metadata from `metadata_path` and converts it into Tensors
+    with shapes:
+
+        wasd:    (1, T, 4)
+        space:   (1, T)
+        shift:   (1, T)
+        mouse_1: (1, T)
+        mouse_2: (1, T)
+        dx:      (1, T)
+        dy:      (1, T)
+
+    Returns them as a dict under the key "actions".
+    """
+    if not metadata_path.exists():
+        # If metadata is missing, handle gracefully or raise error
+        raise FileNotFoundError(f"Metadata file not found at {metadata_path}")
+
+    with open(metadata_path, "r") as f:
+        metadata = json.load(f)
+
+    actions = metadata["actions"]  # list of dicts with "dx", "dy", "buttons", "keys"
+    #num_actions = len(actions)
+
+    # Prepare empty torch arrays:
+    # (T,) or (T,4), but eventually we add a batch dim => (1,T,...) for the final return
+    wasd = torch.zeros(num_actions, 4, dtype=torch.float)
+    space = torch.zeros(num_actions, dtype=torch.float)
+    shift = torch.zeros(num_actions, dtype=torch.float)
+    mouse_1 = torch.zeros(num_actions, dtype=torch.float)
+    mouse_2 = torch.zeros(num_actions, dtype=torch.float)
+    dx = torch.zeros(num_actions, dtype=torch.float)
+    dy = torch.zeros(num_actions, dtype=torch.float)
+
+    # We'll map 'w','a','s','d' to indices 0..3
+    wasd_map = {"w": 0, "a": 1, "s": 2, "d": 3}
+
+    for t, action in enumerate(actions):
+        if t >= num_actions:
+            break
+        # dx, dy
+        dx[t] = float(action.get("dx", 0.0))
+        dy[t] = float(action.get("dy", 0.0))
+
+        # keys: e.g. ["w", "shift", "space"]
+        keys = action.get("keys", [])
+        for k in keys:
+            if k in wasd_map:
+                wasd[t, wasd_map[k]] = 1.0
+            elif k == "space":
+                space[t] = 1.0
+            elif k == "shift":
+                shift[t] = 1.0
+            # If you have more keys you care about, add logic here
+
+        # buttons: e.g. [0] or [0,1] or [1] or []
+        buttons = action.get("buttons", [])
+        if 0 in buttons:  # Typically mouse left
+            mouse_1[t] = 1.0
+        if 1 in buttons:  # Typically mouse right
+            mouse_2[t] = 1.0
+
+    # Insert batch dimension of size 1 => (1, T, ...)
+    actions_tensor_dict = {
+        "wasd": wasd.unsqueeze(0),  # (1, T, 4)
+        "space": space.unsqueeze(0),  # (1, T)
+        "shift": shift.unsqueeze(0),  # (1, T)
+        "mouse_1": mouse_1.unsqueeze(0),  # (1, T)
+        "mouse_2": mouse_2.unsqueeze(0),  # (1, T)
+        "dx": dx.unsqueeze(0),  # (1, T)
+        "dy": dy.unsqueeze(0),  # (1, T)
+    }
+
+    return actions_tensor_dict
+
+
 def preprocess_video_with_buckets(
     video_path: Path,
     resolution_buckets: List[Tuple[int, int, int]],
@@ -169,7 +260,9 @@ def preprocess_video_with_buckets(
     video_num_frames = len(video_reader)
     resolution_buckets = [bucket for bucket in resolution_buckets if bucket[0] <= video_num_frames]
     if len(resolution_buckets) == 0:
-        raise ValueError(f"video frame count in {video_path} is less than all frame buckets {resolution_buckets}")
+        raise ValueError(
+            f"video frame count in {video_path} is less than all frame buckets {resolution_buckets}"
+        )
 
     nearest_frame_bucket = min(
         resolution_buckets,
@@ -181,7 +274,9 @@ def preprocess_video_with_buckets(
     frames = frames[:nearest_frame_bucket].float()
     frames = frames.permute(0, 3, 1, 2).contiguous()
 
-    nearest_res = min(resolution_buckets, key=lambda x: abs(x[1] - frames.shape[2]) + abs(x[2] - frames.shape[3]))
+    nearest_res = min(
+        resolution_buckets, key=lambda x: abs(x[1] - frames.shape[2]) + abs(x[2] - frames.shape[3])
+    )
     nearest_res = (nearest_res[1], nearest_res[2])
     frames = torch.stack([resize(f, nearest_res) for f in frames], dim=0)
 
