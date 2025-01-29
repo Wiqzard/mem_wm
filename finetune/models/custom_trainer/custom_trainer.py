@@ -18,7 +18,9 @@ from finetune.trainer import Trainer
 from finetune.utils import unwrap_model
 
 from ..utils import register
+
 from finetune.models.action_encoder import ActionEncoder
+from finetune.models.transformer import CogVideoXTransformer3DActionModel, config_5b
 from finetune.models.pipeline import CogVideoXImageToVideoPipeline
 
 
@@ -38,9 +40,18 @@ class CogVideoXI2VCustomTrainer(Trainer):
             model_path, subfolder="text_encoder"
         )
 
-        components.transformer = CogVideoXTransformer3DModel.from_pretrained(
+        print("Loading transformer")
+        #components.transformer = CogVideoXTransformer3DModel.from_pretrained(
+        #    model_path, subfolder="transformer"
+        #)
+
+        transformer_weights = CogVideoXTransformer3DModel.from_pretrained(
             model_path, subfolder="transformer"
         )
+        components.transformer =  CogVideoXTransformer3DActionModel(**config_5b)
+        components.transformer.load_state_dict(transformer_weights.state_dict(), strict=False)
+        del transformer_weights
+        #components.transformer.config = config_5b
 
         components.vae = AutoencoderKLCogVideoX.from_pretrained(model_path, subfolder="vae")
 
@@ -49,7 +60,8 @@ class CogVideoXI2VCustomTrainer(Trainer):
         )
 
         components.action_encoder = ActionEncoder(
-            hidden_dim=components.transformer.config.text_embed_dim // 8,
+            hidden_dim=config_5b["text_embed_dim"] // 8,
+            #hidden_dim=components.transformer.config.text_embed_dim // 8,
             group_size=8,
         )
 

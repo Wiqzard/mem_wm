@@ -353,6 +353,7 @@ class Trainer:
         self.lr_scheduler = lr_scheduler
 
     def prepare_for_training(self) -> None:
+
         self.components.transformer, self.optimizer, self.data_loader, self.lr_scheduler = (
             self.accelerator.prepare(
                 self.components.transformer, self.optimizer, self.data_loader, self.lr_scheduler
