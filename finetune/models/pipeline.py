@@ -331,7 +331,7 @@ class CogVideoXImageToVideoPipeline(DiffusionPipeline, CogVideoXLoraLoaderMixin)
     def encode_actions(self, actions: Dict[str, Any], uc=False, device=None, dtype=None):
         B, T = actions["dx"].shape
         actions = {k: v.to(device, dtype=dtype) for k, v in actions.items()}
-        self.action_encoder.to(device, dtype=dtype)
+        #self.action_encoder.to(device, dtype=dtype)
         encoded_actions = self.action_encoder(actions)
         uc_encoded_actions = None 
         if uc: 
@@ -763,11 +763,10 @@ class CogVideoXImageToVideoPipeline(DiffusionPipeline, CogVideoXLoraLoaderMixin)
         if do_classifier_free_guidance:
             prompt_embeds = torch.cat([negative_prompt_embeds, prompt_embeds], dim=0)
         
-        action_embeds, uc_action_embeds = self.encode_actions(actions, uc=do_classifier_free_guidance, device=device, dtype=prompt_embeds.dtype)
-        if do_classifier_free_guidance:
-            action_embeds = torch.cat([uc_action_embeds, action_embeds], dim=0)
-        
-        prompt_embeds = torch.cat([prompt_embeds, action_embeds], dim=1)
+        #action_embeds, uc_action_embeds = self.encode_actions(actions, uc=do_classifier_free_guidance, device=device, dtype=prompt_embeds.dtype)
+        #if do_classifier_free_guidance:
+        #    action_embeds = torch.cat([uc_action_embeds, action_embeds], dim=0)
+        #prompt_embeds = torch.cat([prompt_embeds, action_embeds], dim=1)
 
         # 4. Prepare timesteps
         timesteps, num_inference_steps = retrieve_timesteps(self.scheduler, num_inference_steps, device, timesteps)
@@ -841,6 +840,8 @@ class CogVideoXImageToVideoPipeline(DiffusionPipeline, CogVideoXLoraLoaderMixin)
                     ofs=ofs_emb,
                     image_rotary_emb=image_rotary_emb,
                     attention_kwargs=attention_kwargs,
+                    actions=actions,
+                    uc=False,
                     return_dict=False,
                 )[0]
                 noise_pred = noise_pred.float()

@@ -324,7 +324,7 @@ class I2VDatasetWithActions(I2VDatasetWithResize):
         # Now, load the action metadata:
         video_path = self.videos[index]  # e.g., /path/to/videos/<name>.mp4
         metadata_path = self._get_metadata_path(video_path)
-        actions_tensor_dict = self._load_actions_as_tensors(metadata_path)
+        actions_tensor_dict = self._load_actions_as_tensors(metadata_path, data["video_metadata"]["num_frames"])
 
         data["actions"] = actions_tensor_dict
         return data
@@ -353,7 +353,7 @@ class I2VDatasetWithActions(I2VDatasetWithResize):
         # This is just an example—adapt it to your dataset layout:
         return Path(str(video_path).replace("/videos/", "/metadata/").replace(".mp4", ".json"))
 
-    def _load_actions_as_tensors(self, metadata_path: Path) -> Dict[str, torch.Tensor]:
+    def _load_actions_as_tensors(self, metadata_path: Path, num_actions: int=10000) -> Dict[str, torch.Tensor]:
         """
         Loads the JSON metadata from `metadata_path` and converts it into Tensors
         with shapes:
@@ -376,7 +376,8 @@ class I2VDatasetWithActions(I2VDatasetWithResize):
             metadata = json.load(f)
 
         actions = metadata["actions"]  # list of dicts with "dx", "dy", "buttons", "keys"
-        num_actions = len(actions)
+        num_actions_in_sample = len(actions)
+        num_actions = min(num_actions_in_sample, num_actions - 1)  # Limit to num_actions, or pad if fewer
 
         # Prepare empty torch arrays:
         # (T,) or (T,4), but eventually we add a batch dim => (1,T,...) for the final return

@@ -342,9 +342,9 @@ class ActionEncoder(nn.Module):
 # -----------------------
 # Example usage:
 if __name__ == "__main__":
-    B, T = 2, 6  # batch size=2, 6 frames
-    hidden_dim = 8
-    group_size = 2  # group every 2 frames
+    B, T = 2, 80  # batch size=2, 6 frames
+    hidden_dim = 4096//8 
+    group_size = 8  # group every 2 frames
 
     # Create random actions
     wasd = F.one_hot(torch.randint(0, 4, (B, T)), num_classes=4).float()  # shape (B,T,4)
@@ -367,7 +367,7 @@ if __name__ == "__main__":
 
     # If group_size is None, shape = (B, T*7, hidden_dim)
     # If group_size = l, shape = (B, (T//l)*7, l*hidden_dim)
-    model = ActionEncoder(hidden_dim=hidden_dim, num_frames=10, group_size=group_size)
+    model = ActionEncoder(hidden_dim=hidden_dim, num_frames=T, group_size=group_size)
     out_seq = model(actions)
     print("Output shape:", out_seq.shape)
     # If group_size=2 => out_seq.shape = (2, (6/2)*7, 2*8) = (2, 21, 16)
