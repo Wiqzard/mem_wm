@@ -336,6 +336,6 @@ class CogVideoXI2VCustomTrainer(Trainer):
         return freqs_cos, freqs_sin
 
 
-register("cogvideox1.5-i2v-wm", "wm", CogVideoXI2VCustomTrainer)
-register("cogvideox1.5-i2v-wm", "lora", CogVideoXI2VCustomTrainer)
-register("cogvideox1.5-i2v-wm", "sft", CogVideoXI2VCustomTrainer)
+register("cogvideox1.5-i2v-wm2", "wm", CogVideoXI2VCustomTrainer)
+register("cogvideox1.5-i2v-wm2", "lora", CogVideoXI2VCustomTrainer)
+register("cogvideox1.5-i2v-wm2", "sft", CogVideoXI2VCustomTrainer)

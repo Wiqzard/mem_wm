@@ -14,6 +14,7 @@ class Args(BaseModel):
     model_type: Literal["i2v", "t2v", "wm"]
     training_type: Literal["lora", "sft"] = "lora"
     encoder_path: Path | None = None
+    local_path: Path | None = None
 
     ########## Output ##########
     output_dir: Path = Path("train_results/{:%Y-%m-%d-%H-%M-%S}".format(datetime.datetime.now()))
@@ -186,6 +187,8 @@ class Args(BaseModel):
         parser.add_argument("--model_name", type=str, required=True)
         parser.add_argument("--model_type", type=str, required=True)
         parser.add_argument("--encoder_path", type=str, required=False)
+        parser.add_argument("--local_path", type=str, required=False)
+
 
         parser.add_argument("--training_type", type=str, required=True)
         parser.add_argument("--output_dir", type=str, required=True)

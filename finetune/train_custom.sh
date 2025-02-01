@@ -2,19 +2,17 @@
 
 # Prevent tokenizer parallelism issues
 export TOKENIZERS_PARALLELISM=false
+export HF_HOME=/capstor/store/cscs/swissai/a03/hf
 
 # Model Configuration
 MODEL_ARGS=(
-    #--model_path "THUDM/CogVideoX1.5-5B-I2V"
-    --model_path  "THUDM/CogVideoX-2b"
+    --model_path "THUDM/CogVideoX1.5-5B-I2V"
+    --model_name  "cogvideox-i2v"
     #--model_name "cogvideox1.5-i2v-wm"  # ["cogvideox-i2v"]
-    --model_name  "cogvideox-i2v-wm"
     #--model_type "i2v"
     --model_type "wm"
     #--training_type "sft"
     --training_type "lora"
-    #--local_path /home/ss24m050/Documents/CogVideo/outputs/transformer
-    --local_path /home/ss24m050/Documents/CogVideo/outputs/transformer_2b
     #--encoder_path 
 )
 
@@ -27,10 +25,12 @@ OUTPUT_ARGS=(
 
 # Data Configuration
 DATA_ARGS=(
-    --data_root "/home/ss24m050/Documents/CogVideo/data_test/post"
+    --data_root "/capstor/store/cscs/swissai/a03/datasets/ego4d_mc/train_set"
     --caption_column "prompts.txt"
-    --video_column "videos.txt"
-    --train_resolution "49x352x640"  # (frames x height x width), frames should be 8N+1
+    --image_column "images.txt"
+    --video_column "videos_matching.txt"
+    --train_resolution "81x368x640"  # (frames x height x width), frames should be 8N+1
+    #--train_resolution "49x352x608"  # (frames x height x width), frames should be 8N+1
     #--train_resolution "49x352x640"  # (frames x height x width), frames should be 8N+1
     #--train_resolution "49x36x640"  # (frames x height x width), frames should be 8N+1
     #--train_resolution "81x360x640"  # (frames x height x width), frames should be 8N+1
@@ -59,7 +59,7 @@ SYSTEM_ARGS=(
 
 # Checkpointing Configuration
 CHECKPOINT_ARGS=(
-    --checkpointing_steps 1 # save checkpoint every x steps
+    --checkpointing_steps 2 # save checkpoint every x steps
     --checkpointing_limit 2 # maximum number of checkpoints to keep, after which the oldest one is deleted
   #  --resume_from_checkpoint "/absolute/path/to/checkpoint_dir"  # if you want to resume from a checkpoint, otherwise, comment this line
 )
@@ -67,8 +67,8 @@ CHECKPOINT_ARGS=(
 # Validation Configuration
 VALIDATION_ARGS=(
     --do_validation true #true #false  # ["true", "false"]
-    --validation_dir "/home/ss24m050/Documents/CogVideo/data_test/post" #"/home/ss24m050/Documents/CogVideo/data/data_269"
-    --validation_steps 2  # should be multiple of checkpointing_steps
+    --validation_dir "/capstor/store/cscs/swissai/a03/datasets/ego4d_mc/validation_set" #"/home/ss24m050/Documents/CogVideo/data/data_269"
+    --validation_steps 4  # should be multiple of checkpointing_steps
     --validation_prompts "prompts.txt"
     --validation_images "images.txt"
     --validation_videos "videos.txt"

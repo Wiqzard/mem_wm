@@ -167,15 +167,15 @@ class CogVideoXImageToVideoPipeline(DiffusionPipeline, CogVideoXLoraLoaderMixin)
 
     _callback_tensor_inputs = [
         "latents",
-        "prompt_embeds",
-        "negative_prompt_embeds",
+        #"prompt_embeds",
+        #"negative_prompt_embeds",
         "action_embeds"
     ]
 
     def __init__(
         self,
-        tokenizer: T5Tokenizer,
-        text_encoder: T5EncoderModel,
+        #tokenizer: T5Tokenizer,
+        #text_encoder: T5EncoderModel,
         vae: AutoencoderKLCogVideoX,
         transformer: CogVideoXTransformer3DModel,
         scheduler: Union[CogVideoXDDIMScheduler, CogVideoXDPMScheduler],
@@ -184,8 +184,8 @@ class CogVideoXImageToVideoPipeline(DiffusionPipeline, CogVideoXLoraLoaderMixin)
         super().__init__()
 
         self.register_modules(
-            tokenizer=tokenizer,
-            text_encoder=text_encoder,
+            #tokenizer=tokenizer,
+            #text_encoder=text_encoder,
             vae=vae,
             transformer=transformer,
             action_encoder=action_encoder,
@@ -203,131 +203,6 @@ class CogVideoXImageToVideoPipeline(DiffusionPipeline, CogVideoXLoraLoaderMixin)
 
         self.video_processor = VideoProcessor(vae_scale_factor=self.vae_scale_factor_spatial)
 
-    # Copied from diffusers.pipelines.cogvideo.pipeline_cogvideox.CogVideoXPipeline._get_t5_prompt_embeds
-    def _get_t5_prompt_embeds(
-        self,
-        prompt: Union[str, List[str]] = None,
-        num_videos_per_prompt: int = 1,
-        max_sequence_length: int = 226,
-        device: Optional[torch.device] = None,
-        dtype: Optional[torch.dtype] = None,
-    ):
-        device = device or self._execution_device
-        dtype = dtype or self.text_encoder.dtype
-
-        prompt = [prompt] if isinstance(prompt, str) else prompt
-        batch_size = len(prompt)
-
-        text_inputs = self.tokenizer(
-            prompt,
-            padding="max_length",
-            max_length=max_sequence_length,
-            truncation=True,
-            add_special_tokens=True,
-            return_tensors="pt",
-        )
-        text_input_ids = text_inputs.input_ids
-        untruncated_ids = self.tokenizer(prompt, padding="longest", return_tensors="pt").input_ids
-
-        if untruncated_ids.shape[-1] >= text_input_ids.shape[-1] and not torch.equal(text_input_ids, untruncated_ids):
-            removed_text = self.tokenizer.batch_decode(untruncated_ids[:, max_sequence_length - 1 : -1])
-            logger.warning(
-                "The following part of your input was truncated because `max_sequence_length` is set to "
-                f" {max_sequence_length} tokens: {removed_text}"
-            )
-
-        prompt_embeds = self.text_encoder(text_input_ids.to(device))[0]
-        prompt_embeds = prompt_embeds.to(dtype=dtype, device=device)
-
-        # duplicate text embeddings for each generation per prompt, using mps friendly method
-        _, seq_len, _ = prompt_embeds.shape
-        prompt_embeds = prompt_embeds.repeat(1, num_videos_per_prompt, 1)
-        prompt_embeds = prompt_embeds.view(batch_size * num_videos_per_prompt, seq_len, -1)
-
-        return prompt_embeds
-
-    # Copied from diffusers.pipelines.cogvideo.pipeline_cogvideox.CogVideoXPipeline.encode_prompt
-    def encode_prompt(
-        self,
-        prompt: Union[str, List[str]],
-        negative_prompt: Optional[Union[str, List[str]]] = None,
-        do_classifier_free_guidance: bool = True,
-        num_videos_per_prompt: int = 1,
-        prompt_embeds: Optional[torch.Tensor] = None,
-        negative_prompt_embeds: Optional[torch.Tensor] = None,
-        max_sequence_length: int = 226,
-        device: Optional[torch.device] = None,
-        dtype: Optional[torch.dtype] = None,
-    ):
-        r"""
-        Encodes the prompt into text encoder hidden states.
-
-        Args:
-            prompt (`str` or `List[str]`, *optional*):
-                prompt to be encoded
-            negative_prompt (`str` or `List[str]`, *optional*):
-                The prompt or prompts not to guide the image generation. If not defined, one has to pass
-                `negative_prompt_embeds` instead. Ignored when not using guidance (i.e., ignored if `guidance_scale` is
-                less than `1`).
-            do_classifier_free_guidance (`bool`, *optional*, defaults to `True`):
-                Whether to use classifier free guidance or not.
-            num_videos_per_prompt (`int`, *optional*, defaults to 1):
-                Number of videos that should be generated per prompt. torch device to place the resulting embeddings on
-            prompt_embeds (`torch.Tensor`, *optional*):
-                Pre-generated text embeddings. Can be used to easily tweak text inputs, *e.g.* prompt weighting. If not
-                provided, text embeddings will be generated from `prompt` input argument.
-            negative_prompt_embeds (`torch.Tensor`, *optional*):
-                Pre-generated negative text embeddings. Can be used to easily tweak text inputs, *e.g.* prompt
-                weighting. If not provided, negative_prompt_embeds will be generated from `negative_prompt` input
-                argument.
-            device: (`torch.device`, *optional*):
-                torch device
-            dtype: (`torch.dtype`, *optional*):
-                torch dtype
-        """
-        device = device or self._execution_device
-
-        prompt = [prompt] if isinstance(prompt, str) else prompt
-        if prompt is not None:
-            batch_size = len(prompt)
-        else:
-            batch_size = prompt_embeds.shape[0]
-
-        if prompt_embeds is None:
-            prompt_embeds = self._get_t5_prompt_embeds(
-                prompt=prompt,
-                num_videos_per_prompt=num_videos_per_prompt,
-                max_sequence_length=max_sequence_length,
-                device=device,
-                dtype=dtype,
-            )
-
-        if do_classifier_free_guidance and negative_prompt_embeds is None:
-            negative_prompt = negative_prompt or ""
-            negative_prompt = batch_size * [negative_prompt] if isinstance(negative_prompt, str) else negative_prompt
-
-            if prompt is not None and type(prompt) is not type(negative_prompt):
-                raise TypeError(
-                    f"`negative_prompt` should be the same type to `prompt`, but got {type(negative_prompt)} !="
-                    f" {type(prompt)}."
-                )
-            elif batch_size != len(negative_prompt):
-                raise ValueError(
-                    f"`negative_prompt`: {negative_prompt} has batch size {len(negative_prompt)}, but `prompt`:"
-                    f" {prompt} has batch size {batch_size}. Please make sure that passed `negative_prompt` matches"
-                    " the batch size of `prompt`."
-                )
-
-            negative_prompt_embeds = self._get_t5_prompt_embeds(
-                prompt=negative_prompt,
-                num_videos_per_prompt=num_videos_per_prompt,
-                max_sequence_length=max_sequence_length,
-                device=device,
-                dtype=dtype,
-            )
-
-        return prompt_embeds, negative_prompt_embeds
-    
     def encode_actions(self, actions: Dict[str, Any], uc=False, device=None, dtype=None):
         B, T = actions["dx"].shape
         actions = {k: v.to(device, dtype=dtype) for k, v in actions.items()}
@@ -340,7 +215,6 @@ class CogVideoXImageToVideoPipeline(DiffusionPipeline, CogVideoXLoraLoaderMixin)
             uc_encoded_actions = self.action_encoder(actions, uc=True) 
         self.action_encoder.cpu()
         return encoded_actions, uc_encoded_actions
-
 
     def prepare_latents(
         self,
@@ -484,37 +358,37 @@ class CogVideoXImageToVideoPipeline(DiffusionPipeline, CogVideoXLoraLoaderMixin)
             raise ValueError(
                 f"`callback_on_step_end_tensor_inputs` has to be in {self._callback_tensor_inputs}, but found {[k for k in callback_on_step_end_tensor_inputs if k not in self._callback_tensor_inputs]}"
             )
-        if prompt is not None and prompt_embeds is not None:
-            raise ValueError(
-                f"Cannot forward both `prompt`: {prompt} and `prompt_embeds`: {prompt_embeds}. Please make sure to"
-                " only forward one of the two."
-            )
-        elif prompt is None and prompt_embeds is None:
-            raise ValueError(
-                "Provide either `prompt` or `prompt_embeds`. Cannot leave both `prompt` and `prompt_embeds` undefined."
-            )
-        elif prompt is not None and (not isinstance(prompt, str) and not isinstance(prompt, list)):
-            raise ValueError(f"`prompt` has to be of type `str` or `list` but is {type(prompt)}")
+        #if prompt is not None and prompt_embeds is not None:
+        #    raise ValueError(
+        #        f"Cannot forward both `prompt`: {prompt} and `prompt_embeds`: {prompt_embeds}. Please make sure to"
+        #        " only forward one of the two."
+        #    )
+        #elif prompt is None and prompt_embeds is None:
+        #    raise ValueError(
+        #        "Provide either `prompt` or `prompt_embeds`. Cannot leave both `prompt` and `prompt_embeds` undefined."
+        #    )
+        #elif prompt is not None and (not isinstance(prompt, str) and not isinstance(prompt, list)):
+        #    raise ValueError(f"`prompt` has to be of type `str` or `list` but is {type(prompt)}")
 
-        if prompt is not None and negative_prompt_embeds is not None:
-            raise ValueError(
-                f"Cannot forward both `prompt`: {prompt} and `negative_prompt_embeds`:"
-                f" {negative_prompt_embeds}. Please make sure to only forward one of the two."
-            )
+        #if prompt is not None and negative_prompt_embeds is not None:
+        #    raise ValueError(
+        #        f"Cannot forward both `prompt`: {prompt} and `negative_prompt_embeds`:"
+        #        f" {negative_prompt_embeds}. Please make sure to only forward one of the two."
+        #    )
 
-        if negative_prompt is not None and negative_prompt_embeds is not None:
-            raise ValueError(
-                f"Cannot forward both `negative_prompt`: {negative_prompt} and `negative_prompt_embeds`:"
-                f" {negative_prompt_embeds}. Please make sure to only forward one of the two."
-            )
+        #if negative_prompt is not None and negative_prompt_embeds is not None:
+        #    raise ValueError(
+        #        f"Cannot forward both `negative_prompt`: {negative_prompt} and `negative_prompt_embeds`:"
+        #        f" {negative_prompt_embeds}. Please make sure to only forward one of the two."
+        #    )
 
-        if prompt_embeds is not None and negative_prompt_embeds is not None:
-            if prompt_embeds.shape != negative_prompt_embeds.shape:
-                raise ValueError(
-                    "`prompt_embeds` and `negative_prompt_embeds` must have the same shape when passed directly, but"
-                    f" got: `prompt_embeds` {prompt_embeds.shape} != `negative_prompt_embeds`"
-                    f" {negative_prompt_embeds.shape}."
-                )
+        #if prompt_embeds is not None and negative_prompt_embeds is not None:
+        #    if prompt_embeds.shape != negative_prompt_embeds.shape:
+        #        raise ValueError(
+        #            "`prompt_embeds` and `negative_prompt_embeds` must have the same shape when passed directly, but"
+        #            f" got: `prompt_embeds` {prompt_embeds.shape} != `negative_prompt_embeds`"
+        #            f" {negative_prompt_embeds.shape}."
+        #        )
 
         #if  actions["dx"].shape[1] != num_frames - 1:
         #    raise ValueError(
@@ -735,12 +609,13 @@ class CogVideoXImageToVideoPipeline(DiffusionPipeline, CogVideoXLoraLoaderMixin)
         self._interrupt = False
 
         # 2. Default call parameters
-        if prompt is not None and isinstance(prompt, str):
-            batch_size = 1
-        elif prompt is not None and isinstance(prompt, list):
-            batch_size = len(prompt)
-        else:
-            batch_size = prompt_embeds.shape[0]
+        batch_size = 1
+        #if prompt is not None and isinstance(prompt, str):
+        #    batch_size = 1
+        #elif prompt is not None and isinstance(prompt, list):
+        #    batch_size = len(prompt)
+        #else:
+        #    batch_size = prompt_embeds.shape[0]
 
         device = self._execution_device
 
@@ -750,18 +625,18 @@ class CogVideoXImageToVideoPipeline(DiffusionPipeline, CogVideoXLoraLoaderMixin)
         do_classifier_free_guidance = guidance_scale > 1.0
 
         # 3. Encode input prompt
-        prompt_embeds, negative_prompt_embeds = self.encode_prompt(
-            prompt=prompt,
-            negative_prompt=negative_prompt,
-            do_classifier_free_guidance=do_classifier_free_guidance,
-            num_videos_per_prompt=num_videos_per_prompt,
-            prompt_embeds=prompt_embeds,
-            negative_prompt_embeds=negative_prompt_embeds,
-            max_sequence_length=max_sequence_length,
-            device=device,
-        )
-        if do_classifier_free_guidance:
-            prompt_embeds = torch.cat([negative_prompt_embeds, prompt_embeds], dim=0)
+        #prompt_embeds, negative_prompt_embeds = self.encode_prompt(
+        #    prompt=prompt,
+        #    negative_prompt=negative_prompt,
+        #    do_classifier_free_guidance=do_classifier_free_guidance,
+        #    num_videos_per_prompt=num_videos_per_prompt,
+        #    prompt_embeds=prompt_embeds,
+        #    negative_prompt_embeds=negative_prompt_embeds,
+        #    max_sequence_length=max_sequence_length,
+        #    device=device,
+        #)
+        #if do_classifier_free_guidance:
+        #    prompt_embeds = torch.cat([negative_prompt_embeds, prompt_embeds], dim=0)
         
         #action_embeds, uc_action_embeds = self.encode_actions(actions, uc=do_classifier_free_guidance, device=device, dtype=prompt_embeds.dtype)
         #if do_classifier_free_guidance:
@@ -816,6 +691,13 @@ class CogVideoXImageToVideoPipeline(DiffusionPipeline, CogVideoXLoraLoaderMixin)
         # 8. Denoising loop
         num_warmup_steps = max(len(timesteps) - num_inference_steps * self.scheduler.order, 0)
 
+        if do_classifier_free_guidance:
+            dummy_actions = self.components.transformer.action_encoder.get_dummy_input(num_frames=num_frames, batch_size=batch_size)
+            # actions is dict[str, torch.Tensor(B, T)]
+            # concetenate actions and dummy_actions to make it (2B, T)
+            actions = {k: torch.cat([actions[k], dummy_actions[k]], dim=0) for k in actions}
+
+
         with self.progress_bar(total=num_inference_steps) as progress_bar:
             # for DPM-solver++
             old_pred_original_sample = None
@@ -835,7 +717,7 @@ class CogVideoXImageToVideoPipeline(DiffusionPipeline, CogVideoXLoraLoaderMixin)
                 # predict noise model_output
                 noise_pred = self.transformer(
                     hidden_states=latent_model_input,
-                    encoder_hidden_states=prompt_embeds,
+                    encoder_hidden_states=None, #prompt_embeds,
                     timestep=timestep,
                     ofs=ofs_emb,
                     image_rotary_emb=image_rotary_emb,

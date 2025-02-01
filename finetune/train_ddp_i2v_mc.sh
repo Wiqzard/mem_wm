@@ -22,7 +22,7 @@ OUTPUT_ARGS=(
 # Data Configuration
 DATA_ARGS=(
     --data_root "/home/ss24m050/Documents/CogVideo/data/data_269"
-    --caption_column "prompts.txt"
+    #--caption_column "prompts.txt"
     --video_column "videos.txt"
     # --image_column "images.txt"  # comment this line will use first frame of video as image conditioning
     #--train_resolution "81x768x1360"  # (frames x height x width), frames should be 8N+1
@@ -59,7 +59,7 @@ VALIDATION_ARGS=(
     --do_validation false #true #false  # ["true", "false"]
     --validation_dir "/home/ss24m050/Documents/CogVideo/data/data_269"
     --validation_steps 100  # should be multiple of checkpointing_steps
-    --validation_prompts "prompts.txt"
+    #--validation_prompts "prompts.txt"
     --validation_images "images.txt"
     --gen_fps 16
 )

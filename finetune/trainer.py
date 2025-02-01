@@ -29,7 +29,8 @@ from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
 
 from finetune.constants import LOG_LEVEL, LOG_NAME
-from finetune.datasets import I2VDatasetWithResize, T2VDatasetWithResize, I2VDatasetWithActions
+from finetune.datasets import I2VDatasetWithResize, T2VDatasetWithResize
+from finetune.datasets import I2VDatasetWithActions
 from finetune.datasets.utils import (
     load_images,
     load_prompts,
@@ -187,8 +188,8 @@ class Trainer:
             self.dataset = I2VDatasetWithActions(
                 **(self.args.model_dump()),
                 device=self.accelerator.device,
-                max_num_frames=self.state.train_frames
-                - 1,  # we give action a_{n-1} and generate frame s_n, no need for a_n
+                max_num_frames=self.state.train_frames,
+                # - 1,  # we give action a_{n-1} and generate frame s_n, no need for a_n
                 height=self.state.train_height,
                 width=self.state.train_width,
                 trainer=self,
@@ -198,13 +199,15 @@ class Trainer:
 
         # Prepare VAE and text encoder for encoding
         self.components.vae.requires_grad_(False)
-        self.components.text_encoder.requires_grad_(False)
+        if self.components.text_encoder is not None:
+            self.components.text_encoder.requires_grad_(False)
         self.components.vae = self.components.vae.to(
             self.accelerator.device, dtype=self.state.weight_dtype
         )
-        self.components.text_encoder = self.components.text_encoder.to(
-            self.accelerator.device, dtype=self.state.weight_dtype
-        )
+        if self.components.text_encoder is not None:
+            self.components.text_encoder = self.components.text_encoder.to(
+                self.accelerator.device, dtype=self.state.weight_dtype
+            )
 
         # Precompute latent for video and prompt embedding
         logger.info("Precomputing latent for video and prompt embedding ...")
@@ -222,7 +225,8 @@ class Trainer:
         logger.info("Precomputing latent for video and prompt embedding ... Done")
 
         unload_model(self.components.vae)
-        unload_model(self.components.text_encoder)
+        if self.components.text_encoder is not None:
+            unload_model(self.components.text_encoder)
         free_memory()
 
         self.data_loader = torch.utils.data.DataLoader(

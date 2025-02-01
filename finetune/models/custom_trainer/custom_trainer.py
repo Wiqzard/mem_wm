@@ -4,7 +4,7 @@ import torch
 from diffusers import (
     AutoencoderKLCogVideoX,
     CogVideoXDPMScheduler,
-    #CogVideoXImageToVideoPipeline,
+    # CogVideoXImageToVideoPipeline,
     CogVideoXTransformer3DModel,
 )
 from diffusers.models.embeddings import get_3d_rotary_pos_embed
@@ -34,49 +34,28 @@ class CogVideoXI2VCustomTrainer(Trainer):
 
         components.pipeline_cls = CogVideoXImageToVideoPipeline
 
-        components.tokenizer = AutoTokenizer.from_pretrained(model_path, subfolder="tokenizer")
+        # components.tokenizer = AutoTokenizer.from_pretrained(model_path, subfolder="tokenizer")
+        # components.text_encoder = T5EncoderModel.from_pretrained(
+        #    model_path, subfolder="text_encoder"
+        # )
 
-        components.text_encoder = T5EncoderModel.from_pretrained(
-            model_path, subfolder="text_encoder"
-        )
-
-        print("Loading transformer")
-        #components.transformer = CogVideoXTransformer3DModel.from_pretrained(
-        #    model_path, subfolder="transformer"
-        #)
-
-        #transformer_weights = CogVideoXTransformer3DModel.from_pretrained(
-        #    model_path, subfolder="transformer"
-        #)
-        #components.transformer =  CogVideoXTransformer3DActionModel.from_pretrained("/home/ss24m050/Documents/CogVideo/outputs/transformer") #(**config_5b)
-        components.transformer =  CogVideoXTransformer3DActionModel.from_pretrained("/home/ss24m050/Documents/CogVideo/outputs/transformer_2b") #(**config_5b)
-        #components.transformer.load_state_dict(transformer_weights.state_dict(), strict=False)
-        #del transformer_weights
-        #components.transformer.config = config_5b
+        components.transformer = CogVideoXTransformer3DActionModel.from_pretrained(
+            self.args.local_path if self.args.local_path is not None else model_path,
+            #"/home/ss24m050/Documents/CogVideo/outputs/transformer_2b"
+        )  # (**config_5b)
 
         components.vae = AutoencoderKLCogVideoX.from_pretrained(model_path, subfolder="vae")
 
         components.scheduler = CogVideoXDPMScheduler.from_pretrained(
             model_path, subfolder="scheduler"
         )
-
-        #components.action_encoder = ActionEncoder(
-        #    hidden_dim=config_5b["text_embed_dim"] // 8,
-        #    #hidden_dim=components.transformer.config.text_embed_dim // 8,
-        #    group_size=8,
-        #)
-
-        #if str(self.args.encoder_path) != "None":
-        #    components.action_encoder.load_state_dict(torch.load(self.args.encoder_path))
-        #components.action_encoder.to(self.accelerator.device)
-
         return components
 
     @override
     def initialize_pipeline(self) -> CogVideoXImageToVideoPipeline:
         pipe = CogVideoXImageToVideoPipeline(
-            tokenizer=self.components.tokenizer,
-            text_encoder=self.components.text_encoder,
+            # tokenizer=self.components.tokenizer,
+            # text_encoder=self.components.text_encoder,
             vae=self.components.vae,
             transformer=unwrap_model(self.accelerator, self.components.transformer),
             action_encoder=self.components.action_encoder,
@@ -115,12 +94,12 @@ class CogVideoXI2VCustomTrainer(Trainer):
 
         for sample in samples:
             encoded_video = sample["encoded_video"]
-            prompt_embedding = sample["prompt_embedding"]
+            # prompt_embedding = sample["prompt_embedding"]
             image = sample["image"]
             action = sample["actions"]
 
             ret["encoded_videos"].append(encoded_video)
-            ret["prompt_embedding"].append(prompt_embedding)
+            # ret["prompt_embedding"].append(prompt_embedding)
             ret["images"].append(image)
             for key, value in sample["actions"].items():
                 if key not in ret["actions"]:
@@ -128,7 +107,7 @@ class CogVideoXI2VCustomTrainer(Trainer):
                 ret["actions"][key].append(value)
 
         ret["encoded_videos"] = torch.stack(ret["encoded_videos"])
-        ret["prompt_embedding"] = torch.stack(ret["prompt_embedding"])
+        # ret["prompt_embedding"] = torch.stack(ret["prompt_embedding"])
         ret["images"] = torch.stack(ret["images"])
 
         for key in ret["actions"]:
@@ -153,7 +132,7 @@ class CogVideoXI2VCustomTrainer(Trainer):
 
     @override
     def compute_loss(self, batch) -> torch.Tensor:
-        #prompt_embedding = batch["prompt_embedding"]
+        # prompt_embedding = batch["prompt_embedding"]
         latent = batch["encoded_videos"]
         images = batch["images"]
         actions = batch["actions"]
@@ -173,16 +152,16 @@ class CogVideoXI2VCustomTrainer(Trainer):
         batch_size, num_channels, num_frames, height, width = latent.shape
 
         # Get prompt embeddings
-        #_, seq_len, _ = prompt_embedding.shape
-        #prompt_embedding = prompt_embedding.view(batch_size, seq_len, -1).to(dtype=latent.dtype)
+        # _, seq_len, _ = prompt_embedding.shape
+        # prompt_embedding = prompt_embedding.view(batch_size, seq_len, -1).to(dtype=latent.dtype)
 
         # get action embedding
-        #uc = bool(torch.rand(1) < 0.2)
-        #action_embedding = self.encode_actions(
+        # uc = bool(torch.rand(1) < 0.2)
+        # action_embedding = self.encode_actions(
         #    actions, uc=uc, device=self.accelerator.device, dtype=latent.dtype
-        #)
+        # )
 
-        #prompt_embedding = torch.cat([prompt_embedding, action_embedding], dim=1)
+        # prompt_embedding = torch.cat([prompt_embedding, action_embedding], dim=1)
 
         # Add frame dimension to images [B,C,H,W] -> [B,C,F,H,W]
         images = images.unsqueeze(2)
@@ -254,7 +233,7 @@ class CogVideoXI2VCustomTrainer(Trainer):
         uc = bool(torch.rand(1) < 0.2)
         predicted_noise = self.components.transformer(
             hidden_states=latent_img_noisy,
-            encoder_hidden_states=prompt_embedding,
+            encoder_hidden_states=None,  # prompt_embedding,
             timestep=timesteps,
             ofs=ofs_emb,
             image_rotary_emb=rotary_emb,
@@ -287,7 +266,7 @@ class CogVideoXI2VCustomTrainer(Trainer):
         and for images, the data format is PIL
         """
         prompt, image, video, actions = (
-            eval_data["prompt"],
+            # eval_data["prompt"],
             eval_data["image"],
             eval_data["video"],
             eval_data["actions"],
@@ -297,7 +276,7 @@ class CogVideoXI2VCustomTrainer(Trainer):
             num_frames=self.state.train_frames,
             height=self.state.train_height,
             width=self.state.train_width,
-            prompt=prompt,
+            # prompt=prompt,
             image=image,
             actions=actions,
             generator=self.state.generator,
@@ -335,6 +314,10 @@ class CogVideoXI2VCustomTrainer(Trainer):
 
         return freqs_cos, freqs_sin
 
+
+register("cogvideox-i2v-wm", "wm", CogVideoXI2VCustomTrainer)
+register("cogvideox-i2v-wm", "lora", CogVideoXI2VCustomTrainer)
+register("cogvideox-i2v-wm", "sft", CogVideoXI2VCustomTrainer)
 
 register("cogvideox1.5-i2v-wm", "wm", CogVideoXI2VCustomTrainer)
 register("cogvideox1.5-i2v-wm", "lora", CogVideoXI2VCustomTrainer)

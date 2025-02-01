@@ -465,24 +465,28 @@ class CogVideoXTransformer3DActionModel(ModelMixin, ConfigMixin, PeftAdapterMixi
             ofs_emb = ofs_emb.to(dtype=hidden_states.dtype)
             ofs_emb = self.ofs_embedding(ofs_emb)
             emb = emb + ofs_emb
-        # 2. Patch embedding
+
         encoded_actions = self.encode_actions(
             actions, uc=uc, device=hidden_states.device, dtype=hidden_states.dtype
         )
-        hidden_states = torch.cat([encoder_hidden_states, encoded_actions], dim=1)
 
+        if encoder_hidden_states is not None:
+            encoder_hidden_states = torch.cat([encoder_hidden_states, encoded_actions], dim=1)
+        else:
+            encoder_hidden_states = encoded_actions
+            # pad to self.max_text_seq_length
+            encoder_hidden_states = F.pad(
+                encoder_hidden_states,
+                (0, 0, 0, self.config.max_text_seq_length - encoder_hidden_states.shape[1]),
+            )
+
+        # 2. Patch embedding
         hidden_states = self.patch_embed(encoder_hidden_states, hidden_states)
         hidden_states = self.embedding_dropout(hidden_states)
+
         text_seq_length = encoder_hidden_states.shape[1]
         encoder_hidden_states = hidden_states[:, :text_seq_length]
         hidden_states = hidden_states[:, text_seq_length:]
-
-        # uc = torch.rand(1) < 0.2
-        # if actions is not None:
-        #    actions = self.encode_actions(
-        #        actions, uc=uc, device=hidden_states.device, dtype=hidden_states.dtype
-        #    )
-        #    hidden_states = torch.cat([hidden_states, actions], dim=1)
 
         # 3. Transformer blocks
         for i, block in enumerate(self.transformer_blocks):
