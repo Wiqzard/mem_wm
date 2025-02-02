@@ -657,8 +657,9 @@ class CogVideoXImageToVideoPipeline(DiffusionPipeline, CogVideoXLoraLoaderMixin)
             additional_frames = patch_size_t - latent_frames % patch_size_t
             num_frames += additional_frames * self.vae_scale_factor_temporal
 
+        dtype = torch.bfloat16
         image = self.video_processor.preprocess(image, height=height, width=width).to(
-            device, dtype=prompt_embeds.dtype
+            device , dtype=dtype #prompt_embeds.dtype
         )
 
         latent_channels = self.transformer.config.in_channels // 2
@@ -669,11 +670,12 @@ class CogVideoXImageToVideoPipeline(DiffusionPipeline, CogVideoXLoraLoaderMixin)
             num_frames,
             height,
             width,
-            prompt_embeds.dtype,
+            dtype, #torch.bfloat16,
             device,
             generator,
             latents,
         )
+        #latents = latents.to(dtype)
 
         # 6. Prepare extra step kwargs. TODO: Logic should ideally just be moved out of the pipeline
         extra_step_kwargs = self.prepare_extra_step_kwargs(generator, eta)
@@ -692,7 +694,8 @@ class CogVideoXImageToVideoPipeline(DiffusionPipeline, CogVideoXLoraLoaderMixin)
         num_warmup_steps = max(len(timesteps) - num_inference_steps * self.scheduler.order, 0)
 
         if do_classifier_free_guidance:
-            dummy_actions = self.components.transformer.action_encoder.get_dummy_input(num_frames=num_frames, batch_size=batch_size)
+            num_actions = actions["dx"].shape[1]
+            dummy_actions = self.transformer.action_encoder.get_dummy_input(num_frames=num_actions, batch_size=batch_size)
             # actions is dict[str, torch.Tensor(B, T)]
             # concetenate actions and dummy_actions to make it (2B, T)
             actions = {k: torch.cat([actions[k], dummy_actions[k]], dim=0) for k in actions}
@@ -750,7 +753,7 @@ class CogVideoXImageToVideoPipeline(DiffusionPipeline, CogVideoXLoraLoaderMixin)
                         **extra_step_kwargs,
                         return_dict=False,
                     )
-                latents = latents.to(prompt_embeds.dtype)
+                latents = latents.to(dtype) #.to(prompt_embeds.dtype)
 
                 # call the callback, if provided
                 if callback_on_step_end is not None:
@@ -760,8 +763,8 @@ class CogVideoXImageToVideoPipeline(DiffusionPipeline, CogVideoXLoraLoaderMixin)
                     callback_outputs = callback_on_step_end(self, i, t, callback_kwargs)
 
                     latents = callback_outputs.pop("latents", latents)
-                    prompt_embeds = callback_outputs.pop("prompt_embeds", prompt_embeds)
-                    negative_prompt_embeds = callback_outputs.pop("negative_prompt_embeds", negative_prompt_embeds)
+                    #prompt_embeds = callback_outputs.pop("prompt_embeds", prompt_embeds)
+                    #negative_prompt_embeds = callback_outputs.pop("negative_prompt_embeds", negative_prompt_embeds)
 
                 if i == len(timesteps) - 1 or ((i + 1) > num_warmup_steps and (i + 1) % self.scheduler.order == 0):
                     progress_bar.update()

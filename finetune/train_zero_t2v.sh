@@ -53,7 +53,7 @@ CHECKPOINT_ARGS=(
 
 # Validation Configuration
 VALIDATION_ARGS=(
-    --do_validation false  # ["true", "false"]
+    --do_validation true # ["true", "false"]
     --validation_dir "/absolute/path/to/validation_set"
     --validation_steps 20  # should be multiple of checkpointing_steps
     --validation_prompts "prompts.txt"

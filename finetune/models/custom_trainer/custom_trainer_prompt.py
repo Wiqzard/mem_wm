@@ -130,7 +130,8 @@ class CogVideoXI2VCustomTrainer(Trainer):
         ret["encoded_videos"] = torch.stack(ret["encoded_videos"])
         ret["prompt_embedding"] = torch.stack(ret["prompt_embedding"])
         ret["images"] = torch.stack(ret["images"])
-
+        for key in ret["actions"]:
+            print(f"Key: {key}, Shapes: {[x.shape for x in ret['actions'][key]]}")
         for key in ret["actions"]:
             ret["actions"][key] = torch.cat(ret["actions"][key], dim=0)
 

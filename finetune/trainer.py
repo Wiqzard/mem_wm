@@ -257,7 +257,6 @@ class Trainer:
             if hasattr(component, "requires_grad_"):
                 if self.args.training_type == "sft" and attr_name in [
                     "transformer",
-                    "action_encoder",
                 ]:
                     component.requires_grad_(True)
                 else:
@@ -292,11 +291,11 @@ class Trainer:
             filter(lambda p: p.requires_grad, self.components.transformer.parameters())
         )
         # add action encoder parameters
-        if self.args.training_type == "sft":
-            trainable_parameters += list(
-                filter(lambda p: p.requires_grad, self.components.action_encoder.parameters())
-            )
-
+#        if self.args.training_type == "sft":
+#            trainable_parameters += list(
+#                filter(lambda p: p.requires_grad, self.components.action_encoder.parameters())
+#            )
+#
         transformer_parameters_with_lr = {
             "params": trainable_parameters,
             "lr": self.args.learning_rate,
@@ -546,8 +545,8 @@ class Trainer:
             return
 
         self.components.transformer.eval()
-        if self.components.action_encoder is not None:
-            self.components.action_encoder.eval()
+        #if self.components.action_encoder is not None:
+        #    self.components.action_encoder.eval()
         torch.set_grad_enabled(False)
 
         memory_statistics = get_memory_statistics()
@@ -561,7 +560,7 @@ class Trainer:
             # so we need to move all components in pipe to device
             # pipe.to(self.accelerator.device, dtype=self.state.weight_dtype)
             self.__move_components_to_device(
-                dtype=self.state.weight_dtype, ignore_list=["transformer", "action_encoder"]
+                dtype=self.state.weight_dtype, ignore_list=["transformer", ]
             )
         else:
             # if not using deepspeed, use model_cpu_offload to further reduce memory usage
@@ -575,7 +574,7 @@ class Trainer:
         #################################
 
         all_processes_artifacts = []
-        for i in range(num_validation_samples):
+        for i in range(min(3, num_validation_samples)):
             if self.state.using_deepspeed and self.accelerator.deepspeed_plugin.zero_stage != 3:
                 # Skip current validation on all processes but one
                 if i % accelerator.num_processes != accelerator.process_index:
@@ -605,7 +604,7 @@ class Trainer:
 
             if action is not None:
                 action = load_actions_as_tensors(action, num_actions=self.state.train_frames - 1)
-                print(action["dx"].shape)
+                # print(action["dx"].shape)
 
             logger.debug(
                 f"Validating sample {i + 1}/{num_validation_samples} on process {accelerator.process_index}. Prompt: {prompt}",
@@ -709,8 +708,6 @@ class Trainer:
 
         torch.set_grad_enabled(True)
         self.components.transformer.train()
-        if self.components.action_encoder is not None:
-            self.components.action_encoder.train()
 
     def fit(self):
         self.check_setting()

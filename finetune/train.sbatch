@@ -6,7 +6,7 @@
 #SBATCH --partition=normal
 #SBATCH --ntasks=1
 #SBATCH --environment=mem_wm
-#SBATCH --container-workdir=/users/sstapf/mem_wm/finetune 
+#SBATCH --container-workdir=/capstor/scratch/cscs/sstapf/mem_wm/finetune 
 
 
-srun --pty bash train_ddp_custom.sh 
+srun --pty bash train_custom.sh 

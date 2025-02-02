@@ -447,7 +447,11 @@ class I2VDatasetWithActions(I2VDatasetWithResize):
             "dx": dx.unsqueeze(0),  # (1, T)
             "dy": dy.unsqueeze(0),  # (1, T)
         }
-
+        #print(wasd.shape)
+        #print(space.shape)
+        #print(shift.shape)
+        #print(mouse_1.shape)
+        #print(dx.shape)
         return actions_tensor_dict
 
 

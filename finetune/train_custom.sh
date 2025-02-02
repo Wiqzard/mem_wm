@@ -2,18 +2,20 @@
 
 # Prevent tokenizer parallelism issues
 export TOKENIZERS_PARALLELISM=false
+
 export HF_HOME=/capstor/store/cscs/swissai/a03/hf
 
 # Model Configuration
 MODEL_ARGS=(
     --model_path "THUDM/CogVideoX1.5-5B-I2V"
-    --model_name  "cogvideox-i2v"
-    #--model_name "cogvideox1.5-i2v-wm"  # ["cogvideox-i2v"]
+    #--model_name  "cogvideox-i2v-wm"
+    --model_name "cogvideox1.5-i2v-wm"  # ["cogvideox-i2v"]
     #--model_type "i2v"
     --model_type "wm"
-    #--training_type "sft"
-    --training_type "lora"
+    --training_type "sft"
+    #--training_type "lora"
     #--encoder_path 
+    --local_path /capstor/scratch/cscs/sstapf/mem_wm/outputs/transformer
 )
 
 # Output Configuration

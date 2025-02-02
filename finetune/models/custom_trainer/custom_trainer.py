@@ -4,7 +4,7 @@ import torch
 from diffusers import (
     AutoencoderKLCogVideoX,
     CogVideoXDPMScheduler,
-    # CogVideoXImageToVideoPipeline,
+    #CogVideoXImageToVideoPipeline,
     CogVideoXTransformer3DModel,
 )
 from diffusers.models.embeddings import get_3d_rotary_pos_embed
@@ -58,7 +58,7 @@ class CogVideoXI2VCustomTrainer(Trainer):
             # text_encoder=self.components.text_encoder,
             vae=self.components.vae,
             transformer=unwrap_model(self.accelerator, self.components.transformer),
-            action_encoder=self.components.action_encoder,
+            #action_encoder=self.components.action_encoder,
             scheduler=self.components.scheduler,
         )
         return pipe
@@ -109,7 +109,6 @@ class CogVideoXI2VCustomTrainer(Trainer):
         ret["encoded_videos"] = torch.stack(ret["encoded_videos"])
         # ret["prompt_embedding"] = torch.stack(ret["prompt_embedding"])
         ret["images"] = torch.stack(ret["images"])
-
         for key in ret["actions"]:
             ret["actions"][key] = torch.cat(ret["actions"][key], dim=0)
 
@@ -265,7 +264,7 @@ class CogVideoXI2VCustomTrainer(Trainer):
         Return the data that needs to be saved. For videos, the data format is List[PIL],
         and for images, the data format is PIL
         """
-        prompt, image, video, actions = (
+        image, video, actions = (
             # eval_data["prompt"],
             eval_data["image"],
             eval_data["video"],
