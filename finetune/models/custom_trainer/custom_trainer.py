@@ -132,8 +132,8 @@ class CogVideoXI2VCustomTrainer(Trainer):
     @override
     def compute_loss(self, batch) -> torch.Tensor:
         # prompt_embedding = batch["prompt_embedding"]
-        latent = batch["encoded_videos"]
-        images = batch["images"]
+        latent = batch["encoded_videos"].to(self.accelerator.device)
+        images = batch["images"].to(self.accelerator.device)
         actions = batch["actions"]
 
         # Shape of prompt_embedding: [B, seq_len, hidden_size]

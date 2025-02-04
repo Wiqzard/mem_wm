@@ -416,6 +416,8 @@ class CogVideoXTransformer3DActionModel(ModelMixin, ConfigMixin, PeftAdapterMixi
     def encode_actions(self, actions: Dict[str, Any], uc=False, device=None, dtype=None):
         B, T = actions["dx"].shape
         # self.action_encoder.to(device, dtype=dtype)
+        #print(200*"-")
+        #print(T)
         if uc:
             dummy_actions = self.action_encoder.get_dummy_input(num_frames=T, batch_size=B)
             dummy_actions = {k: v.to(device, dtype=dtype) for k, v in dummy_actions.items()}

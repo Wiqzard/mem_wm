@@ -1,3 +1,4 @@
+import random
 import sys
 import hashlib
 import json
@@ -291,7 +292,7 @@ class Trainer:
             action_encoder_parameters = list(filter(lambda p: p.requires_grad, self.components.transformer.action_encoder.parameters()))
             other_parameters = [p for p in trainable_parameters if id(p) not in {id(x) for x in action_encoder_parameters}]
             params_to_optimize = [
-                {"params": action_encoder_parameters, "lr": self.args.learning_rate * 2},  # Increased LR for action_encoder
+                {"params": action_encoder_parameters, "lr": self.args.learning_rate * 4},  # Increased LR for action_encoder
                 {"params": other_parameters, "lr": self.args.learning_rate},  # Standard LR for others
             ]
             self.state.num_trainable_parameters = sum(p.numel() for p in trainable_parameters)
@@ -580,6 +581,7 @@ class Trainer:
 
         all_processes_artifacts = []
         for i in range(min(3, num_validation_samples)):
+            #j = random.randint(0, num_validation_samples - 1)
             if self.state.using_deepspeed and self.accelerator.deepspeed_plugin.zero_stage != 3:
                 # Skip current validation on all processes but one
                 if i % accelerator.num_processes != accelerator.process_index:
