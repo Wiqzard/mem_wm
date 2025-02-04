@@ -90,15 +90,19 @@ class CogVideoXI2VCustomTrainer(Trainer):
 
     @override
     def collate_fn(self, samples: list[dict[str, any]]) -> dict[str, any]:
-        ret = {"encoded_videos": [], "prompt_embedding": [], "images": [], "actions": {}}
+        ret = {"encoded_videos": [], "prompt_embedding": [], "images": [], "actions": {},
+               "videos": []}
 
         for sample in samples:
-            encoded_video = sample["encoded_video"]
             # prompt_embedding = sample["prompt_embedding"]
             image = sample["image"]
-            action = sample["actions"]
+            if "videos" in sample:
+                video = sample["videos"]
+                ret["videos"].append(video)
 
-            ret["encoded_videos"].append(encoded_video)
+            encoded_video = sample["encoded_video"]
+            if encoded_video is not None: 
+                ret["encoded_videos"].append(encoded_video)
             # ret["prompt_embedding"].append(prompt_embedding)
             ret["images"].append(image)
             for key, value in sample["actions"].items():
@@ -106,9 +110,11 @@ class CogVideoXI2VCustomTrainer(Trainer):
                     ret["actions"][key] = []
                 ret["actions"][key].append(value)
 
-        ret["encoded_videos"] = torch.stack(ret["encoded_videos"])
-        # ret["prompt_embedding"] = torch.stack(ret["prompt_embedding"])
+        if len(ret["encoded_videos"]) > 0:
+            ret["encoded_videos"] = torch.stack(ret["encoded_videos"])
         ret["images"] = torch.stack(ret["images"])
+        if len(ret["videos"]) > 0:
+            ret["videos"] = torch.stack(ret["videos"])
         for key in ret["actions"]:
             ret["actions"][key] = torch.cat(ret["actions"][key], dim=0)
 
@@ -132,7 +138,12 @@ class CogVideoXI2VCustomTrainer(Trainer):
     @override
     def compute_loss(self, batch) -> torch.Tensor:
         # prompt_embedding = batch["prompt_embedding"]
-        latent = batch["encoded_videos"].to(self.accelerator.device)
+        if self.args.online_encoding:
+            encoded_videos = [self.encode_video(video) for video in batch["videos"]]
+            encoded_videos = torch.stack(encoded_videos)
+            latent = encoded_videos
+        else:
+            latent = batch["encoded_videos"].to(self.accelerator.device)
         images = batch["images"].to(self.accelerator.device)
         actions = batch["actions"]
 
@@ -239,6 +250,7 @@ class CogVideoXI2VCustomTrainer(Trainer):
             return_dict=False,
             actions=actions,
             uc=uc,
+            mask_ratio=0.1
         )[0]
 
         # Denoise

@@ -665,10 +665,10 @@ class CogVideoXImageToVideoPipeline(DiffusionPipeline, CogVideoXLoraLoaderMixin)
         # 8. Denoising loop
         num_warmup_steps = max(len(timesteps) - num_inference_steps * self.scheduler.order, 0)
 
-        if do_classifier_free_guidance:
-            num_actions = actions["dx"].shape[1]
-            dummy_actions = self.transformer.action_encoder.get_dummy_input(num_frames=num_actions, batch_size=batch_size)
-            actions = {k: torch.cat([actions[k], dummy_actions[k]], dim=0) for k in actions}
+        #if do_classifier_free_guidance:
+        #    num_actions = actions["dx"].shape[1]
+        #    dummy_actions = self.transformer.action_encoder.get_dummy_input(num_frames=num_actions, batch_size=batch_size)
+        #    actions = {k: torch.cat([actions[k], dummy_actions[k]], dim=0) for k in actions}
 
 
         with self.progress_bar(total=num_inference_steps) as progress_bar:
@@ -697,6 +697,7 @@ class CogVideoXImageToVideoPipeline(DiffusionPipeline, CogVideoXLoraLoaderMixin)
                     attention_kwargs=attention_kwargs,
                     actions=actions,
                     uc=False,
+                    cfg=do_classifier_free_guidance,
                     return_dict=False,
                 )[0]
                 noise_pred = noise_pred.float()

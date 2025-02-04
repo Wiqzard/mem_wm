@@ -11,10 +11,10 @@ MODEL_ARGS=(
     --model_name  "cogvideox-i2v-wm"
     #--model_type "i2v"
     --model_type "wm"
+    --training_type "lora"
     #--training_type "sft"
-    --training_type "sft"
-    --local_path /home/ss24m050/Documents/CogVideo/outputs/transformer
-    #--local_path /home/ss24m050/Documents/CogVideo/outputs/transformer_2b_iv
+    #--local_path /home/ss24m050/Documents/CogVideo/outputs/transformer
+    --local_path /home/ss24m050/Documents/CogVideo/outputs/transformer_2b_iv
     #--encoder_path 
 )
 

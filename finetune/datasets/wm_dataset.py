@@ -58,7 +58,7 @@ class BaseI2VDataset(Dataset):
         image_column: str | None,
         device: torch.device,
         trainer: "Trainer" = None,
-        memory_efficient: bool = True,
+        encode_online: bool = True,
         *args,
         **kwargs,
     ) -> None:
@@ -77,7 +77,7 @@ class BaseI2VDataset(Dataset):
         self.device = device
         self.encode_video = trainer.encode_video
         self.encode_text = trainer.encode_text
-        self.memory_efficient = memory_efficient
+        self.encode_online = encode_online 
 
         # Check if number of prompts matches number of videos and images
         # if not (len(self.videos) == len(self.prompts) == len(self.images)):
@@ -147,7 +147,7 @@ class BaseI2VDataset(Dataset):
         #    prompt_embedding = prompt_embedding[0]
         #    save_file({"prompt_embedding": prompt_embedding}, prompt_embedding_path)
         #    logger.info(f"Saved prompt embedding to {prompt_embedding_path}", main_process_only=False)
-        if not self.memory_efficient:
+        if self.encode_online:
             frames, image = self.preprocess(video, image)
             image = self.image_transform(image)
             # Current shape of frames: [F, C, H, W]
@@ -160,9 +160,9 @@ class BaseI2VDataset(Dataset):
                 "video": frames,
                 "encoded_video": None,
                 "video_metadata": {
-                    "num_frames": frames.shape[2], #// self.encoder vae ...
-                    "height": frames.shape[3],#// self.encoder vae ...
-                    "width": frames.shape[4],#// self.encoder vae ...
+                    "num_frames": frames.shape[2] // 4, #// self.encoder vae ...
+                    "height": frames.shape[3] // 8 ,#// self.encoder vae ...
+                    "width": frames.shape[4] // 8 , #// self.encoder vae ...
                 },
                 
             }

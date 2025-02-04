@@ -53,7 +53,7 @@ class ActionEncoder(nn.Module):
     the final output has shape (B, (T//l) * 10, l * hidden_dim).
     """
 
-    def __init__(self, hidden_dim=32, num_frames=20, group_size=None):
+    def __init__(self, out_dim=1920):
         """
         Args:
             hidden_dim (int): Size of the output embedding dimension.
@@ -61,9 +61,10 @@ class ActionEncoder(nn.Module):
             group_size (int): If set, group that many frames together, stacking them in the channel dim.
         """
         super().__init__()
+        assert out_dim % 10 == 0, "out_dim must be divisible by 10"
+        hidden_dim = out_dim // 10
         self.hidden_dim = hidden_dim
         #self.num_frames = num_frames
-        self.group_size = group_size
 
         # Binary embeddings for W, A, S, D, space, shift, mouse_1, mouse_2 (2 states each: 0 or 1)
         self.w_embedding = nn.Embedding(2, hidden_dim)
@@ -88,11 +89,12 @@ class ActionEncoder(nn.Module):
         self.frame_embedding_table = nn.Embedding(160, hidden_dim)
 
 
-        # Mask token for optional uc=True usage
-        if self.group_size is not None:
-            self.mask_token = nn.Parameter(torch.randn(1, hidden_dim * self.group_size))
-        else:
-            self.mask_token = nn.Parameter(torch.randn(1, hidden_dim))
+        self.mask_token = nn.Parameter(torch.randn(1, hidden_dim * 10))
+        ## Mask token for optional uc=True usage
+        #if self.group_size is not None:
+        #    self.mask_token = nn.Parameter(torch.randn(1, hidden_dim * self.group_size))
+        #else:
+        #    self.mask_token = nn.Parameter(torch.randn(1, hidden_dim))
     
     def _initialize_weights(self):
         # zero init
@@ -103,6 +105,14 @@ class ActionEncoder(nn.Module):
                 nn.init.xavier_uniform_(m.weight)
                 if m.bias is not None:
                     nn.init.constant_(m.bias, 0)
+    
+    def mask_action_sequence(self, action_encoding, mask_prob=0.15):
+        # apply mask to actions (replace encoding with mask token)
+        B, T, _ = action_encoding.shape
+        mask = torch.bernoulli(torch.full((B, T), mask_prob)).bool()
+        action_encoding[mask] = self.mask_token
+        return action_encoding
+        
 
     def forward(self, actions, uc=False):
         """
@@ -125,6 +135,7 @@ class ActionEncoder(nn.Module):
 
         # If uc=True, just return repeated mask tokens of the appropriate shape
         if uc:
+            return self.mask_token.repeat(B, T, 1)
             if self.group_size is not None:
                 return self.mask_token.repeat(B, (T // self.group_size) * 10, 1)
             else:
@@ -180,6 +191,8 @@ class ActionEncoder(nn.Module):
         # -----------------------------------------------------
         # 6) Flatten or group
         # -----------------------------------------------------
+        return out_with_time.view(B, T, 10 * self.hidden_dim)
+
         if self.group_size is None:
             # Flatten time dimension (T) and the "10" slots => (B, T*10, hidden_dim)
             out_seq = out_with_time.view(B, T * 10, self.hidden_dim)

@@ -40,6 +40,7 @@ from finetune.datasets.utils import (
     load_actions_as_tensors,
     preprocess_image_with_resize,
     preprocess_video_with_resize,
+    format_action_string
 )
 from finetune.schemas import Args, Components, State
 from finetune.utils import (
@@ -194,6 +195,7 @@ class Trainer:
                 height=self.state.train_height,
                 width=self.state.train_width,
                 trainer=self,
+                encode_online=self.args.encode_online,
             )
         else:
             raise ValueError(f"Invalid model type: {self.args.model_type}")
@@ -611,6 +613,7 @@ class Trainer:
 
             if action is not None:
                 action = load_actions_as_tensors(action, num_actions=self.state.train_frames - 1)
+                action_string = format_action_string(action)
                 # print(action["dx"].shape)
 
             logger.debug(
@@ -665,7 +668,7 @@ class Trainer:
                 elif artifact_type == "video":
                     logger.debug(f"Saving video to {filename}")
                     export_to_video(artifact_value, filename, fps=self.args.gen_fps)
-                    artifact_value = wandb.Video(filename, caption=prompt)
+                    artifact_value = wandb.Video(filename, caption=action_string)
 
                 all_processes_artifacts.append(artifact_value)
 

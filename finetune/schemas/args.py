@@ -40,6 +40,7 @@ class Args(BaseModel):
     gradient_accumulation_steps: int = 1
 
     train_resolution: Tuple[int, int, int]  # shape: (frames, height, width)
+    online_encodings: bool = False
 
     #### deprecated args: video_resolution_buckets
     # if use bucket for training, should not be None
@@ -212,6 +213,8 @@ class Args(BaseModel):
         parser.add_argument("--epsilon", type=float, default=1e-8)
         parser.add_argument("--weight_decay", type=float, default=1e-4)
         parser.add_argument("--max_grad_norm", type=float, default=1.0)
+        parser.add_argument("--online_encoding", type=int, default=0)
+
 
         # Learning rate scheduler
         parser.add_argument("--lr_scheduler", type=str, default="constant_with_warmup")
