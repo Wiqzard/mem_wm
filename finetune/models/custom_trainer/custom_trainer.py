@@ -138,7 +138,7 @@ class CogVideoXI2VCustomTrainer(Trainer):
     @override
     def compute_loss(self, batch) -> torch.Tensor:
         # prompt_embedding = batch["prompt_embedding"]
-        if self.args.online_encoding:
+        if self.args.encode_online:
             encoded_videos = [self.encode_video(video) for video in batch["videos"]]
             encoded_videos = torch.stack(encoded_videos)
             latent = encoded_videos
