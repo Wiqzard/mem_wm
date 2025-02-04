@@ -21,7 +21,6 @@ from diffusers.utils.torch_utils import randn_tensor
 from diffusers.video_processor import VideoProcessor
 from diffusers.pipelines.cogvideo.pipeline_output import CogVideoXPipelineOutput
 
-from finetune.models.action_encoder import ActionEncoder
 
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
 
@@ -167,28 +166,19 @@ class CogVideoXImageToVideoPipeline(DiffusionPipeline, CogVideoXLoraLoaderMixin)
 
     _callback_tensor_inputs = [
         "latents",
-        #"prompt_embeds",
-        #"negative_prompt_embeds",
-        "action_embeds"
     ]
 
     def __init__(
         self,
-        #tokenizer: T5Tokenizer,
-        #text_encoder: T5EncoderModel,
         vae: AutoencoderKLCogVideoX,
         transformer: CogVideoXTransformer3DModel,
         scheduler: Union[CogVideoXDDIMScheduler, CogVideoXDPMScheduler],
-        action_encoder: Optional[ActionEncoder] = None,
     ):
         super().__init__()
 
         self.register_modules(
-            #tokenizer=tokenizer,
-            #text_encoder=text_encoder,
             vae=vae,
             transformer=transformer,
-            action_encoder=action_encoder,
             scheduler=scheduler,
         )
         self.vae_scale_factor_spatial = (
@@ -203,18 +193,6 @@ class CogVideoXImageToVideoPipeline(DiffusionPipeline, CogVideoXLoraLoaderMixin)
 
         self.video_processor = VideoProcessor(vae_scale_factor=self.vae_scale_factor_spatial)
 
-    def encode_actions(self, actions: Dict[str, Any], uc=False, device=None, dtype=None):
-        B, T = actions["dx"].shape
-        actions = {k: v.to(device, dtype=dtype) for k, v in actions.items()}
-        #self.action_encoder.to(device, dtype=dtype)
-        encoded_actions = self.action_encoder(actions)
-        uc_encoded_actions = None 
-        if uc: 
-            dummy_actions = self.action_encoder.get_dummy_input(num_frames=T, batch_size=B)
-            dummy_actions = {k: v.to(device, dtype=dtype) for k, v in dummy_actions.items()}
-            uc_encoded_actions = self.action_encoder(actions, uc=True) 
-        self.action_encoder.cpu()
-        return encoded_actions, uc_encoded_actions
 
     def prepare_latents(
         self,
@@ -637,11 +615,6 @@ class CogVideoXImageToVideoPipeline(DiffusionPipeline, CogVideoXLoraLoaderMixin)
         #)
         #if do_classifier_free_guidance:
         #    prompt_embeds = torch.cat([negative_prompt_embeds, prompt_embeds], dim=0)
-        
-        #action_embeds, uc_action_embeds = self.encode_actions(actions, uc=do_classifier_free_guidance, device=device, dtype=prompt_embeds.dtype)
-        #if do_classifier_free_guidance:
-        #    action_embeds = torch.cat([uc_action_embeds, action_embeds], dim=0)
-        #prompt_embeds = torch.cat([prompt_embeds, action_embeds], dim=1)
 
         # 4. Prepare timesteps
         timesteps, num_inference_steps = retrieve_timesteps(self.scheduler, num_inference_steps, device, timesteps)
@@ -659,7 +632,7 @@ class CogVideoXImageToVideoPipeline(DiffusionPipeline, CogVideoXLoraLoaderMixin)
 
         dtype = torch.bfloat16
         image = self.video_processor.preprocess(image, height=height, width=width).to(
-            device , dtype=dtype #prompt_embeds.dtype
+            device , dtype=dtype 
         )
 
         latent_channels = self.transformer.config.in_channels // 2
@@ -675,7 +648,6 @@ class CogVideoXImageToVideoPipeline(DiffusionPipeline, CogVideoXLoraLoaderMixin)
             generator,
             latents,
         )
-        #latents = latents.to(dtype)
 
         # 6. Prepare extra step kwargs. TODO: Logic should ideally just be moved out of the pipeline
         extra_step_kwargs = self.prepare_extra_step_kwargs(generator, eta)
@@ -696,8 +668,6 @@ class CogVideoXImageToVideoPipeline(DiffusionPipeline, CogVideoXLoraLoaderMixin)
         if do_classifier_free_guidance:
             num_actions = actions["dx"].shape[1]
             dummy_actions = self.transformer.action_encoder.get_dummy_input(num_frames=num_actions, batch_size=batch_size)
-            # actions is dict[str, torch.Tensor(B, T)]
-            # concetenate actions and dummy_actions to make it (2B, T)
             actions = {k: torch.cat([actions[k], dummy_actions[k]], dim=0) for k in actions}
 
 

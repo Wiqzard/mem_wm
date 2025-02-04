@@ -210,19 +210,20 @@ class Trainer:
             )
 
         # Precompute latent for video and prompt embedding
-        logger.info("Precomputing latent for video and prompt embedding ...")
-        tmp_data_loader = torch.utils.data.DataLoader(
-            self.dataset,
-            collate_fn=self.collate_fn,
-            batch_size=1,
-            num_workers=0,
-            pin_memory=self.args.pin_memory,
-        )
-        tmp_data_loader = self.accelerator.prepare_data_loader(tmp_data_loader)
-        for _ in tmp_data_loader:
-            ...
-        self.accelerator.wait_for_everyone()
-        logger.info("Precomputing latent for video and prompt embedding ... Done")
+        if False:
+            logger.info("Precomputing latent for video and prompt embedding ...")
+            tmp_data_loader = torch.utils.data.DataLoader(
+                self.dataset,
+                collate_fn=self.collate_fn,
+                batch_size=1,
+                num_workers=0,
+                pin_memory=self.args.pin_memory,
+            )
+            tmp_data_loader = self.accelerator.prepare_data_loader(tmp_data_loader)
+            for _ in tqdm(tmp_data_loader):
+                ...
+            self.accelerator.wait_for_everyone()
+            logger.info("Precomputing latent for video and prompt embedding ... Done")
 
         unload_model(self.components.vae)
         if self.components.text_encoder is not None:
@@ -285,23 +286,27 @@ class Trainer:
         # Make sure the trainable params are in float32
         cast_training_params([self.components.transformer], dtype=torch.float32)
 
-        # For LoRA, we only want to train the LoRA weights
-        # For SFT, we want to train all the parameters
-        trainable_parameters = list(
-            filter(lambda p: p.requires_grad, self.components.transformer.parameters())
-        )
-        # add action encoder parameters
-#        if self.args.training_type == "sft":
-#            trainable_parameters += list(
-#                filter(lambda p: p.requires_grad, self.components.action_encoder.parameters())
-#            )
-#
-        transformer_parameters_with_lr = {
-            "params": trainable_parameters,
-            "lr": self.args.learning_rate,
-        }
-        params_to_optimize = [transformer_parameters_with_lr]
-        self.state.num_trainable_parameters = sum(p.numel() for p in trainable_parameters)
+        if True:
+            trainable_parameters = list(filter(lambda p: p.requires_grad, self.components.transformer.parameters()))
+            action_encoder_parameters = list(filter(lambda p: p.requires_grad, self.components.transformer.action_encoder.parameters()))
+            other_parameters = [p for p in trainable_parameters if id(p) not in {id(x) for x in action_encoder_parameters}]
+            params_to_optimize = [
+                {"params": action_encoder_parameters, "lr": self.args.learning_rate * 2},  # Increased LR for action_encoder
+                {"params": other_parameters, "lr": self.args.learning_rate},  # Standard LR for others
+            ]
+            self.state.num_trainable_parameters = sum(p.numel() for p in trainable_parameters)
+        else:
+            # For LoRA, we only want to train the LoRA weights
+            # For SFT, we want to train all the parameters
+            trainable_parameters = list(
+                filter(lambda p: p.requires_grad, self.components.transformer.parameters())
+            )
+            transformer_parameters_with_lr = {
+                "params": trainable_parameters,
+                "lr": self.args.learning_rate,
+            }
+            params_to_optimize = [transformer_parameters_with_lr]
+            self.state.num_trainable_parameters = sum(p.numel() for p in trainable_parameters)
 
         use_deepspeed_opt = (
             self.accelerator.state.deepspeed_plugin is not None

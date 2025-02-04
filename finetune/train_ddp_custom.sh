@@ -59,7 +59,7 @@ SYSTEM_ARGS=(
 
 # Checkpointing Configuration
 CHECKPOINT_ARGS=(
-    --checkpointing_steps 1 # save checkpoint every x steps
+    --checkpointing_steps 200 # save checkpoint every x steps
     --checkpointing_limit 2 # maximum number of checkpoints to keep, after which the oldest one is deleted
   #  --resume_from_checkpoint "/absolute/path/to/checkpoint_dir"  # if you want to resume from a checkpoint, otherwise, comment this line
 )
@@ -68,7 +68,7 @@ CHECKPOINT_ARGS=(
 VALIDATION_ARGS=(
     --do_validation true #true #false  # ["true", "false"]
     --validation_dir "/home/ss24m050/Documents/CogVideo/data_test/post" #"/home/ss24m050/Documents/CogVideo/data/data_269"
-    --validation_steps 2  # should be multiple of checkpointing_steps
+    --validation_steps 200  # should be multiple of checkpointing_steps
     --validation_prompts "prompts.txt"
     --validation_images "images.txt"
     --validation_videos "videos.txt"

@@ -479,6 +479,8 @@ class CogVideoXTransformer3DActionModel(ModelMixin, ConfigMixin, PeftAdapterMixi
                 encoder_hidden_states,
                 (0, 0, 0, self.config.max_text_seq_length - encoder_hidden_states.shape[1]),
             )
+        #print(encoder_hidden_states.shape)
+        #encoder_hidden_states = torch.zeros_like(encoder_hidden_states)
 
         # 2. Patch embedding
         hidden_states = self.patch_embed(encoder_hidden_states, hidden_states)

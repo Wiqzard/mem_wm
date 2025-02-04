@@ -93,6 +93,16 @@ class ActionEncoder(nn.Module):
             self.mask_token = nn.Parameter(torch.randn(1, hidden_dim * self.group_size))
         else:
             self.mask_token = nn.Parameter(torch.randn(1, hidden_dim))
+    
+    def _initialize_weights(self):
+        # zero init
+        for m in self.modules():
+            if isinstance(m, nn.Embedding):
+                nn.init.normal_(m.weight, std=0.02)
+            elif isinstance(m, nn.Linear):
+                nn.init.xavier_uniform_(m.weight)
+                if m.bias is not None:
+                    nn.init.constant_(m.bias, 0)
 
     def forward(self, actions, uc=False):
         """
