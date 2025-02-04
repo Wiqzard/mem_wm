@@ -138,8 +138,8 @@ class Args(BaseModel):
         if values.get("do_validation"):
             if v is None:
                 raise ValueError("validation_steps must be specified when do_validation is True")
-            if values.get("checkpointing_steps") and v % values["checkpointing_steps"] != 0:
-                raise ValueError("validation_steps must be a multiple of checkpointing_steps")
+            #if values.get("checkpointing_steps") and v % values["checkpointing_steps"] != 0:
+            #    raise ValueError("validation_steps must be a multiple of checkpointing_steps")
         return v
 
     @field_validator("train_resolution")

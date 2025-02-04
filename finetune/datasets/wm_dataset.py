@@ -58,6 +58,7 @@ class BaseI2VDataset(Dataset):
         image_column: str | None,
         device: torch.device,
         trainer: "Trainer" = None,
+        memory_efficient: bool = True,
         *args,
         **kwargs,
     ) -> None:
@@ -76,6 +77,7 @@ class BaseI2VDataset(Dataset):
         self.device = device
         self.encode_video = trainer.encode_video
         self.encode_text = trainer.encode_text
+        self.memory_efficient = memory_efficient
 
         # Check if number of prompts matches number of videos and images
         # if not (len(self.videos) == len(self.prompts) == len(self.images)):
@@ -118,8 +120,11 @@ class BaseI2VDataset(Dataset):
         train_resolution_str = "x".join(str(x) for x in self.trainer.args.train_resolution)
 
         cache_dir = self.trainer.args.data_root / "cache"
+        #video_latent_dir = (
+        #    cache_dir / "video_latent" / self.trainer.args.model_name / train_resolution_str
+        #)
         video_latent_dir = (
-            cache_dir / "video_latent" / self.trainer.args.model_name / train_resolution_str
+            cache_dir / "video_latent" / "cogvideox1.5-i2v-wm" / train_resolution_str
         )
         # prompt_embeddings_dir = cache_dir / "prompt_embeddings"
         video_latent_dir.mkdir(parents=True, exist_ok=True)
@@ -142,6 +147,26 @@ class BaseI2VDataset(Dataset):
         #    prompt_embedding = prompt_embedding[0]
         #    save_file({"prompt_embedding": prompt_embedding}, prompt_embedding_path)
         #    logger.info(f"Saved prompt embedding to {prompt_embedding_path}", main_process_only=False)
+        if not self.memory_efficient:
+            frames, image = self.preprocess(video, image)
+            image = self.image_transform(image)
+            # Current shape of frames: [F, C, H, W]
+            frames = self.video_transform(frames)
+            # Convert to [B, C, F, H, W]
+            frames = frames.unsqueeze(0)
+            frames = frames.permute(0, 2, 1, 3, 4).contiguous()
+            return {
+                "image": image,
+                "video": frames,
+                "encoded_video": None,
+                "video_metadata": {
+                    "num_frames": frames.shape[2], #// self.encoder vae ...
+                    "height": frames.shape[3],#// self.encoder vae ...
+                    "width": frames.shape[4],#// self.encoder vae ...
+                },
+                
+            }
+
 
         if encoded_video_path.exists():
             encoded_video = load_file(encoded_video_path)["encoded_video"]
@@ -152,6 +177,7 @@ class BaseI2VDataset(Dataset):
             _, image = self.preprocess(None, self.images[index])
             image = self.image_transform(image)
         else:
+            logger.debug(f"video path: {encoded_video_path}", main_process_only=False)
             frames, image = self.preprocess(video, image)
             frames = frames.to(self.device)
             image = image.to(self.device)
