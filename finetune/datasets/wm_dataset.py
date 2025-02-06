@@ -58,7 +58,7 @@ class BaseI2VDataset(Dataset):
         image_column: str | None,
         device: torch.device,
         trainer: "Trainer" = None,
-        encode_online: bool = True,
+        encode_online: bool = False,
         *args,
         **kwargs,
     ) -> None:
@@ -133,6 +133,7 @@ class BaseI2VDataset(Dataset):
         # prompt_hash = str(hashlib.sha256(prompt.encode()).hexdigest())
         # prompt_embedding_path = prompt_embeddings_dir / (prompt_hash + ".safetensors")
         encoded_video_path = video_latent_dir / (video.stem + ".safetensors")
+        #print("encoded_video_path", encoded_video_path)
 
         # if prompt_embedding_path.exists():
         #    prompt_embedding = load_file(prompt_embedding_path)["prompt_embedding"]

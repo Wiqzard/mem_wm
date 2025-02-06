@@ -79,11 +79,14 @@ class CogVideoXPatchEmbed(nn.Module):
             self.proj = nn.Linear(in_channels * patch_size * patch_size * patch_size_t, embed_dim)
 
         self.text_proj = nn.Linear(text_embed_dim, embed_dim)
+        #nn.init.zeros_(self.text_proj.weight)
+        #nn.init.zeros_(self.text_proj.bias)
 
         if use_positional_embeddings or use_learned_positional_embeddings:
             persistent = use_learned_positional_embeddings
             pos_embedding = self._get_positional_embeddings(sample_height, sample_width, sample_frames)
             self.register_buffer("pos_embedding", pos_embedding, persistent=persistent)
+
 
     def _get_positional_embeddings(
         self, sample_height: int, sample_width: int, sample_frames: int, device: Optional[torch.device] = None
@@ -392,7 +395,7 @@ class CogVideoXTransformer3DActionModel(ModelMixin, ConfigMixin, PeftAdapterMixi
                 "embeddings. If you're using a custom model and/or believe this should be supported, please open an "
                 "issue at https://github.com/huggingface/diffusers/issues."
             )
-        self.action_encoder = ActionEncoder(text_embed_dim)
+        self.action_encoder = ActionEncoder(hidden_dim=128, out_dim=text_embed_dim)
         # 1. Patch embedding
         self.patch_embed = CogVideoXPatchEmbed(
             patch_size=patch_size,
@@ -547,28 +550,21 @@ class CogVideoXTransformer3DActionModel(ModelMixin, ConfigMixin, PeftAdapterMixi
         if self.original_attn_processors is not None:
             self.set_attn_processor(self.original_attn_processors)
 
-    def encode_actions(self, actions: Dict[str, Any], uc=False, device=None, dtype=None, cfg=False, mask_ratio=0.0):
+    def encode_actions(self, actions: Dict[str, Any], uc=False, device=None, dtype=None, cfg=False, mask_ratio=0.0, sequence_length=226):
         B, T = actions["dx"].shape
+        actions = {k: v.to(device, dtype=dtype) for k, v in actions.items()}
         if cfg:
-            dummy_actions = self.action_encoder.get_dummy_input(num_frames=T, batch_size=B)
-            dummy_actions = {k: v.to(device, dtype=dtype) for k, v in dummy_actions.items()}
-            encoded_uc_actions = self.action_encoder(dummy_actions, uc=True)
-            actions = {k: v.to(device, dtype=dtype) for k, v in actions.items()}
-            encoded_actions = self.action_encoder(actions, uc=False)
+            encoded_uc_actions = self.action_encoder(actions, uc=True, sequence_length=sequence_length)
+            encoded_actions = self.action_encoder(actions, uc=False, sequence_length=sequence_length)
             encoded_actions = torch.cat([encoded_actions, encoded_uc_actions], dim=0)
             return encoded_actions
-        if uc:
-            dummy_actions = self.action_encoder.get_dummy_input(num_frames=T, batch_size=B)
-            dummy_actions = {k: v.to(device, dtype=dtype) for k, v in dummy_actions.items()}
-            encoded_actions = self.action_encoder(actions, uc=True)
-        else:
-            actions = {k: v.to(device, dtype=dtype) for k, v in actions.items()}
-            encoded_actions = self.action_encoder(actions)
 
-        # randomly 
-        if mask_ratio > 0.0:
-            encoded_actions = self.action_encoder.mask_action_sequence(encoded_actions, mask=mask_ratio)
-        
+        if uc:
+            encoded_actions = self.action_encoder(actions, uc=True,  sequence_length=sequence_length)
+
+        else:
+            encoded_actions = self.action_encoder(actions, uc=False, mask_ratio=mask_ratio,  sequence_length=sequence_length)
+
         return encoded_actions
 
     def forward(
@@ -620,15 +616,9 @@ class CogVideoXTransformer3DActionModel(ModelMixin, ConfigMixin, PeftAdapterMixi
 
         if encoder_hidden_states is not None:
             encoder_hidden_states = torch.cat([encoder_hidden_states, encoded_actions], dim=1)
+            assert encoder_hidden_states.shape[1] == self.max_text_seq_length
         else:
             encoder_hidden_states = encoded_actions
-            # pad to self.max_text_seq_length
-            encoder_hidden_states = F.pad(
-                encoder_hidden_states,
-                (0, 0, 0, self.config.max_text_seq_length - encoder_hidden_states.shape[1]),
-            )
-        #print(encoder_hidden_states.shape)
-        #encoder_hidden_states = torch.zeros_like(encoder_hidden_states)
 
         # 2. Patch embedding
         hidden_states = self.patch_embed(encoder_hidden_states, hidden_states)
@@ -728,7 +718,8 @@ config_5b = {
     "spatial_interpolation_scale": 1.875,
     "temporal_compression_ratio": 4,
     "temporal_interpolation_scale": 1.0,
-    "text_embed_dim": 1920,
+    "text_embed_dim": 4096,
+    #"text_embed_dim": 1920,
     "time_embed_dim": 512,
     "timestep_activation_fn": "silu",
     "use_learned_positional_embeddings": False,
@@ -756,7 +747,8 @@ config_2b_iv = {
     "spatial_interpolation_scale": 1.875,
     "temporal_compression_ratio": 4,
     "temporal_interpolation_scale": 1.0,
-    "text_embed_dim": 1920,
+    #"text_embed_dim": 1920,
+    "text_embed_dim": 4096,
     "time_embed_dim": 512,
     "timestep_activation_fn": "silu",
     "use_rotary_positional_embeddings": False,

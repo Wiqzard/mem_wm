@@ -1,4 +1,5 @@
 from typing import Any, Dict, Optional, Tuple, Union
+import math
 
 import torch
 from torch import nn
@@ -31,42 +32,75 @@ from diffusers.models.normalization import AdaLayerNorm, CogVideoXLayerNormZero
 
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
 
+class T5LayerNorm(nn.Module):
+    def __init__(self, hidden_size, eps=1e-6):
+        """
+        Construct a layernorm module in the T5 style. No bias and no subtraction of mean.
+        """
+        super().__init__()
+        self.weight = nn.Parameter(torch.ones(hidden_size))
+        self.variance_epsilon = eps
+
+    def forward(self, hidden_states):
+        # T5 uses a layer_norm which only scales and doesn't shift, which is also known as Root Mean
+        # Square Layer Normalization https://arxiv.org/abs/1910.07467 thus varience is calculated
+        # w/o mean and there is no bias. Additionally we want to make sure that the accumulation for
+        # half-precision inputs is done in fp32
+
+        variance = hidden_states.to(torch.float32).pow(2).mean(-1, keepdim=True)
+        hidden_states = hidden_states * torch.rsqrt(variance + self.variance_epsilon)
+
+        # convert into half-precision if necessary
+        if self.weight.dtype in [torch.float16, torch.bfloat16]:
+            hidden_states = hidden_states.to(self.weight.dtype)
+
+        return self.weight * hidden_states
+
+
+def add_sinusoidal_positional_encoding(tensor, dim):
+    """
+    Adds sinusoidal positional encoding to the given tensor.
+    
+    Args:
+        tensor (torch.Tensor): The input tensor of shape (B, T, D),
+                               where B is batch size, T is sequence length, and D is feature dim.
+        dim (int): The embedding dimension (D).
+
+    Returns:
+        torch.Tensor: The tensor with added positional encodings.
+    """
+    B, T, D = tensor.shape
+    assert D == dim, "Tensor embedding dimension must match the specified dim."
+
+    # Compute positional encodings
+    position = torch.arange(T, dtype=torch.float32, device=tensor.device).unsqueeze(1)  # (T, 1)
+    div_term = torch.exp(torch.arange(0, dim, 2, dtype=torch.float32, device=tensor.device) * 
+                         (-math.log(10000.0) / dim))  # (D/2,)
+
+    pe = torch.zeros(T, dim, device=tensor.device)  # (T, D)
+    pe[:, 0::2] = torch.sin(position * div_term)  # Apply sine to even indices
+    pe[:, 1::2] = torch.cos(position * div_term)  # Apply cosine to odd indices
+
+    # Expand and add positional encoding
+    return tensor + pe.unsqueeze(0)  # Shape: (B, T, D)
+
+
 class ActionEncoder(nn.Module):
     """
     Encodes a dictionary of discrete/continuous actions into a sequence of embeddings.
-
-    We produce 10 embeddings per frame:
-        - W embedding (0 or 1)
-        - A embedding (0 or 1)
-        - S embedding (0 or 1)
-        - D embedding (0 or 1)
-        - Space embedding (0 or 1)
-        - Shift embedding (0 or 1)
-        - dx embedding (continuous, via MLP)
-        - dy embedding (continuous, via MLP)
-        - Mouse_1 embedding (0 or 1)
-        - Mouse_2 embedding (0 or 1)
-
-    Then add a learnable frame (temporal) embedding to each.
-
-    If group_size = l is specified, we group frames in chunks of size l so that
-    the final output has shape (B, (T//l) * 10, l * hidden_dim).
     """
 
-    def __init__(self, out_dim=1920):
+    def __init__(self, hidden_dim=64, out_dim=None):
         """
         Args:
             hidden_dim (int): Size of the output embedding dimension.
-            num_frames (int): Maximum # frames for temporal embedding table.
-            group_size (int): If set, group that many frames together, stacking them in the channel dim.
+            out_dim (int): Output dimension for final projection.
         """
         super().__init__()
-        assert out_dim % 10 == 0, "out_dim must be divisible by 10"
-        hidden_dim = out_dim // 10
+        
         self.hidden_dim = hidden_dim
-        #self.num_frames = num_frames
 
-        # Binary embeddings for W, A, S, D, space, shift, mouse_1, mouse_2 (2 states each: 0 or 1)
+        # Binary action embeddings
         self.w_embedding = nn.Embedding(2, hidden_dim)
         self.a_embedding = nn.Embedding(2, hidden_dim)
         self.s_embedding = nn.Embedding(2, hidden_dim)
@@ -85,36 +119,65 @@ class ActionEncoder(nn.Module):
         self.dx_mlp = make_mlp(1, hidden_dim)
         self.dy_mlp = make_mlp(1, hidden_dim)
 
-        # Temporal embeddings: one learnable embedding per frame index
-        self.frame_embedding_table = nn.Embedding(160, hidden_dim)
+        # Temporal embeddings (one learnable embedding per frame index)
+        self.frame_embedding_table = nn.Embedding(160, hidden_dim * 10)
 
-
+        # Mask token for missing actions
         self.mask_token = nn.Parameter(torch.randn(1, hidden_dim * 10))
-        ## Mask token for optional uc=True usage
-        #if self.group_size is not None:
-        #    self.mask_token = nn.Parameter(torch.randn(1, hidden_dim * self.group_size))
-        #else:
-        #    self.mask_token = nn.Parameter(torch.randn(1, hidden_dim))
+
+        # Output transformation (if necessary)
+        layer_dim = hidden_dim * 10 if out_dim is None else out_dim
+        if out_dim is not None:
+            self.final_ffn = nn.Linear(hidden_dim * 10, out_dim)
+        else:
+            self.final_ffn = None
+
+        # Layer normalization
+        self.layernorm = T5LayerNorm(layer_dim)
+
+        # Apply weight initialization
+        self._init_weights()
+
+    def _init_weights(self):
+        """
+        Custom weight initialization for stable training.
+        """
+        # Normal initialization for binary action embeddings
+        for emb in [
+            self.w_embedding, self.a_embedding, self.s_embedding, self.d_embedding,
+            self.space_embedding, self.shift_embedding, self.mouse1_embedding, self.mouse2_embedding
+        ]:
+            nn.init.normal_(emb.weight, mean=0.0, std=0.02)
+
+        # Kaiming initialization for MLP layers
+        for mlp in [self.dx_mlp, self.dy_mlp]:
+            for layer in mlp:
+                if isinstance(layer, nn.Linear):
+                    nn.init.kaiming_uniform_(layer.weight, nonlinearity='relu')
+                    nn.init.zeros_(layer.bias)
+
+        # Normal initialization for frame embeddings
+        nn.init.normal_(self.frame_embedding_table.weight, mean=0.0, std=0.02)
+
+        # Xavier initialization for final projection (if applicable)
+        if self.final_ffn is not None:
+            nn.init.xavier_uniform_(self.final_ffn.weight)
+            nn.init.zeros_(self.final_ffn.bias)
+
+        # Normal initialization for mask token
+        nn.init.normal_(self.mask_token, mean=0.0, std=0.02)
+
     
-    def _initialize_weights(self):
-        # zero init
-        for m in self.modules():
-            if isinstance(m, nn.Embedding):
-                nn.init.normal_(m.weight, std=0.02)
-            elif isinstance(m, nn.Linear):
-                nn.init.xavier_uniform_(m.weight)
-                if m.bias is not None:
-                    nn.init.constant_(m.bias, 0)
     
-    def mask_action_sequence(self, action_encoding, mask_prob=0.15):
+
+    def mask_action_sequence(self, action_encoding, mask_ratio=0.15):
         # apply mask to actions (replace encoding with mask token)
         B, T, _ = action_encoding.shape
-        mask = torch.bernoulli(torch.full((B, T), mask_prob)).bool()
+        mask = torch.bernoulli(torch.full((B, T), mask_ratio)).bool()
         action_encoding[mask] = self.mask_token
         return action_encoding
-        
 
-    def forward(self, actions, uc=False):
+    def forward(self, actions, uc=False, sequence_length=None, mask_ratio=0.0):
         """
         Args:
             actions is a dictionary containing:
@@ -132,14 +195,6 @@ class ActionEncoder(nn.Module):
             - If group_size = l:      (B, (T//l)*10, l*hidden_dim)
         """
         B, T = actions["space"].shape
-
-        # If uc=True, just return repeated mask tokens of the appropriate shape
-        if uc:
-            return self.mask_token.repeat(B, T, 1)
-            if self.group_size is not None:
-                return self.mask_token.repeat(B, (T // self.group_size) * 10, 1)
-            else:
-                return self.mask_token.repeat(B, T * 10, 1)
 
         # -----------------------------------------------------
         # 1) W, A, S, D embeddings (binary: 0 or 1)
@@ -169,49 +224,55 @@ class ActionEncoder(nn.Module):
         dy_emb = self.dy_mlp(dy_in.view(B * T, 1)).view(B, T, self.hidden_dim)  # (B, T, hidden_dim)
 
         # -----------------------------------------------------
-        # 4) Temporal (frame) embedding => (B, T, hidden_dim)
+        # 4) Combine: For each frame, produce 1 embedding 
         # -----------------------------------------------------
-        frame_ids = torch.arange(T, device=space_emb.device)  # (T,)
-        frame_embs = self.frame_embedding_table(frame_ids)  # (T, hidden_dim)
-        frame_embs = frame_embs.unsqueeze(0).expand(B, T, self.hidden_dim)
 
-        # -----------------------------------------------------
-        # 5) Combine: For each frame, produce 10 embeddings
-        #    Then add frame_embs to each => shape (B, T, 10, hidden_dim)
-        # -----------------------------------------------------
         all_per_frame = [
             w_emb, a_emb, s_emb, d_emb, space_emb, shift_emb,
             dx_emb, dy_emb, mouse1_emb, mouse2_emb
         ]
-        # Stack along dim=2 => (B, T, 10, hidden_dim)
-        out_stacked = torch.stack(all_per_frame, dim=2)
+        out_stacked = torch.cat(all_per_frame, dim=2) # (B, T, 10 * self.hidden_dim)
+
+        # -----------------------------------------------------
+        # 5) Mask action sequence
+        # -----------------------------------------------------
+        if mask_ratio > 0.0:
+            out_stacked = self.mask_action_sequence(out_stacked, mask_ratio=mask_ratio)
+        
+        if uc:
+            out_stacked = self.mask_token.repeat(B, T, 1)
+
+        # -----------------------------------------------------
+        # 6) Temporal (frame) embedding => (B, T, hidden_dim)
+        # -----------------------------------------------------
+        frame_ids = torch.arange(T, device=space_emb.device)  # (T,)
+        frame_embs = self.frame_embedding_table(frame_ids)  # (T, hidden_dim * 10)
+        frame_embs = frame_embs.unsqueeze(0).expand(B, T, self.hidden_dim * 10)
+
         # Add the frame embedding to each of the 10 slots
-        out_with_time = out_stacked + frame_embs.unsqueeze(2)  # (B, T, 10, hidden_dim)
+        out_with_time = out_stacked + frame_embs
 
         # -----------------------------------------------------
-        # 6) Flatten or group
+        # 6) Pad sequence with mask token
         # -----------------------------------------------------
-        return out_with_time.view(B, T, 10 * self.hidden_dim)
+        if sequence_length is not None:
+            out_with_time = self.pad_sequence_with_mask_token(out_with_time, sequence_length) # (B, sequence_length, 10*hidden_dim)
 
-        if self.group_size is None:
-            # Flatten time dimension (T) and the "10" slots => (B, T*10, hidden_dim)
-            out_seq = out_with_time.view(B, T * 10, self.hidden_dim)
-        else:
-            # Group frames by group_size=l. 
-            # Suppose T is divisible by l -> G = T//l
-            # Original shape: (B, T, 10, hidden_dim)
-            # => (B, G, l, 10, hidden_dim)
-            # => permute to (B, G, 10, l, hidden_dim)
-            # => final shape (B, G*10, l*hidden_dim)
-            l = self.group_size
-            assert T % l == 0, "T must be divisible by group_size"
-            G = T // l
+        # -----------------------------------------------------
+        # 8) Final FFN and LayerNorm
+        # -----------------------------------------------------
 
-            out_with_time = out_with_time.view(B, G, l, 10, self.hidden_dim)
-            out_with_time = out_with_time.permute(0, 1, 3, 2, 4)  # (B, G, 10, l, C)
-            out_seq = out_with_time.reshape(B, G * 10, l * self.hidden_dim)
+        if hasattr(self, "final_ffn"):
+            out_with_time = self.final_ffn(out_with_time)
 
-        return out_seq
+
+        dim = 10 * self.hidden_dim if self.final_ffn is None else self.final_ffn.out_features
+
+        out_seq = add_sinusoidal_positional_encoding(out_with_time, dim)
+
+        out_seq = self.layernorm(out_seq)
+
+        return out_seq 
 
 
     @staticmethod
@@ -227,9 +288,9 @@ class ActionEncoder(nn.Module):
         """
         Returns a dummy input for the model.
         """
-        wasd = F.one_hot(
-            torch.randint(0, 4, (batch_size, num_frames)), num_classes=4
-        ).float()
+        # just w
+        wasd = torch.zeros(batch_size, num_frames, 4).float()
+        wasd[:, :, 0] = 1
         space = torch.zeros(batch_size, num_frames)
         shift = torch.zeros(batch_size, num_frames)
         mouse_1 = torch.zeros(batch_size, num_frames)
@@ -246,6 +307,16 @@ class ActionEncoder(nn.Module):
             "dy": dy,
         }
         return actions        
+    
+    def pad_sequence_with_mask_token(self, sequence, sequence_length: int):
+        """
+        Pad the sequence with mask tokens to the specified length.
+        """
+        B, T, _ = sequence.shape
+        if T < sequence_length:
+            mask_token = self.mask_token.repeat(B, sequence_length - T, 1)
+            sequence = torch.cat([sequence, mask_token], dim=1)
+        return sequence
 
 
     #def forward(self, actions, uc=False):

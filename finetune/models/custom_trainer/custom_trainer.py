@@ -40,7 +40,7 @@ class CogVideoXI2VCustomTrainer(Trainer):
         # )
 
         components.transformer = CogVideoXTransformer3DActionModel.from_pretrained(
-            self.args.local_path if self.args.local_path is not None else model_path,
+            self.args.local_path # if self.args.local_path is not None else model_path,
             #"/home/ss24m050/Documents/CogVideo/outputs/transformer_2b"
         )  # (**config_5b)
 
@@ -70,6 +70,11 @@ class CogVideoXI2VCustomTrainer(Trainer):
         video = video.to(vae.device, dtype=vae.dtype)
         latent_dist = vae.encode(video).latent_dist
         latent = latent_dist.sample() * vae.config.scaling_factor
+        #print(latent.shape)
+        #print(latent.mean())
+        #print(latent.std())
+        #print(latent.min())
+        #print(latent.max())
         return latent
 
     @override
@@ -96,8 +101,8 @@ class CogVideoXI2VCustomTrainer(Trainer):
         for sample in samples:
             # prompt_embedding = sample["prompt_embedding"]
             image = sample["image"]
-            if "videos" in sample:
-                video = sample["videos"]
+            if "video" in sample:
+                video = sample["video"]
                 ret["videos"].append(video)
 
             encoded_video = sample["encoded_video"]
@@ -139,11 +144,14 @@ class CogVideoXI2VCustomTrainer(Trainer):
     def compute_loss(self, batch) -> torch.Tensor:
         # prompt_embedding = batch["prompt_embedding"]
         if self.args.encode_online:
-            encoded_videos = [self.encode_video(video) for video in batch["videos"]]
-            encoded_videos = torch.stack(encoded_videos)
-            latent = encoded_videos
+            with torch.no_grad():
+                encoded_videos = self.encode_video(batch["videos"].squeeze(1))
+                #encoded_videos = [self.encode_video(video) for video in batch["videos"]]
+                #encoded_videos = torch.stack(encoded_videos).squeeze(1)
+                latent = encoded_videos
         else:
             latent = batch["encoded_videos"].to(self.accelerator.device)
+        
         images = batch["images"].to(self.accelerator.device)
         actions = batch["actions"]
 
@@ -291,6 +299,8 @@ class CogVideoXI2VCustomTrainer(Trainer):
             image=image,
             actions=actions,
             generator=self.state.generator,
+            guidance_scale=6
+            
         ).frames[0]
         return [("video", video_generate)]
 

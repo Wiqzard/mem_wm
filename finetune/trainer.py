@@ -195,7 +195,6 @@ class Trainer:
                 height=self.state.train_height,
                 width=self.state.train_width,
                 trainer=self,
-                encode_online=self.args.encode_online,
             )
         else:
             raise ValueError(f"Invalid model type: {self.args.model_type}")
@@ -289,12 +288,12 @@ class Trainer:
         # Make sure the trainable params are in float32
         cast_training_params([self.components.transformer], dtype=torch.float32)
 
-        if True:
+        if False:
             trainable_parameters = list(filter(lambda p: p.requires_grad, self.components.transformer.parameters()))
             action_encoder_parameters = list(filter(lambda p: p.requires_grad, self.components.transformer.action_encoder.parameters()))
             other_parameters = [p for p in trainable_parameters if id(p) not in {id(x) for x in action_encoder_parameters}]
             params_to_optimize = [
-                {"params": action_encoder_parameters, "lr": self.args.learning_rate * 4},  # Increased LR for action_encoder
+                {"params": action_encoder_parameters, "lr": self.args.learning_rate * 2 },  # Increased LR for action_encoder
                 {"params": other_parameters, "lr": self.args.learning_rate},  # Standard LR for others
             ]
             self.state.num_trainable_parameters = sum(p.numel() for p in trainable_parameters)
@@ -582,7 +581,7 @@ class Trainer:
         #################################
 
         all_processes_artifacts = []
-        for i in range(min(3, num_validation_samples)):
+        for i in range(min(8, num_validation_samples-1)):
             #j = random.randint(0, num_validation_samples - 1)
             if self.state.using_deepspeed and self.accelerator.deepspeed_plugin.zero_stage != 3:
                 # Skip current validation on all processes but one
