@@ -478,6 +478,8 @@ class CogVideoXImageToVideoPipeline(DiffusionPipeline, CogVideoXLoraLoaderMixin)
         ] = None,
         callback_on_step_end_tensor_inputs: List[str] = ["latents"],
         max_sequence_length: int = 226,
+        dtype: Optional[torch.dtype] = None,
+        batch_size = 1
     ) -> Union[CogVideoXPipelineOutput, Tuple]:
         """
         Function invoked when calling the pipeline for generation.
@@ -587,7 +589,7 @@ class CogVideoXImageToVideoPipeline(DiffusionPipeline, CogVideoXLoraLoaderMixin)
         self._interrupt = False
 
         # 2. Default call parameters
-        batch_size = 1
+        batch_size = batch_size
         #if prompt is not None and isinstance(prompt, str):
         #    batch_size = 1
         #elif prompt is not None and isinstance(prompt, list):
@@ -630,7 +632,8 @@ class CogVideoXImageToVideoPipeline(DiffusionPipeline, CogVideoXLoraLoaderMixin)
             additional_frames = patch_size_t - latent_frames % patch_size_t
             num_frames += additional_frames * self.vae_scale_factor_temporal
 
-        dtype = torch.bfloat16
+        dtype = torch.bfloat16 if dtype is None else dtype
+
         image = self.video_processor.preprocess(image, height=height, width=width).to(
             device , dtype=dtype 
         )

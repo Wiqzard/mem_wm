@@ -8,10 +8,10 @@ export  WANDB_API_KEY=11b574cdfa34332326c4a0a1ac8f7b06fb123637 #11b574cdfa343323
 
 # Model Configuration
 MODEL_ARGS=(
-    --model_path  "THUDM/CogVideoX-2b"
-    --model_name  "cogvideox-i2v-wm"
-    #--model_path "THUDM/CogVideoX1.5-5B-I2V"
-    #--model_name "cogvideox1.5-i2v-wm"  # ["cogvideox-i2v"]
+    #--model_path  "THUDM/CogVideoX-2b"
+    #--model_name  "cogvideox-i2v-wm"
+    --model_path "THUDM/CogVideoX1.5-5B-I2V"
+    --model_name "cogvideox1.5-i2v-wm"  # ["cogvideox-i2v"]
     #--model_type "i2v"
     --model_type "wm"
     --training_type "sft"
@@ -19,14 +19,15 @@ MODEL_ARGS=(
     #--encoder_path 
     #--local_path /capstor/scratch/cscs/sstapf/mem_wm/outputs/transformer_5b
     #--local_path /capstor/scratch/cscs/sstapf/mem_wm/outputs/transformer_2b_iv
-    --local_path /capstor/scratch/cscs/sstapf/mem_wm/finetune/outputs/outputs_2_hlr_49/checkpoint-2000
-    #--local_path /capstor/scratch/cscs/sstapf/mem_wm/finetune/outputs/outputs_1.5_hlr/checkpoint-3400
+    #--local_path /capstor/scratch/cscs/sstapf/mem_wm/finetune/outputs/outputs_2_hlr_49/checkpoint-2000
+    --local_path /capstor/scratch/cscs/sstapf/mem_wm/finetune/outputs/outputs_1.5_hlr/checkpoint-3400
 )
 
 # Output Configuration
 OUTPUT_ARGS=(
    #--output_dir "outputs/outputs_2_hlr_81_cached_fp16"
-    --output_dir "outputs/outputs_2_hlr_49_cont"
+    #--output_dir "outputs/outputs_2_hlr_49_cont"
+    --output_dir "outputs/gen"
     #--output_dir "outputs/outputs_1.5_hlr_cont"
     #--output_dir "outputs/outputs_2_hlr_49_fp16"
     #--output_dir "outputs/outputs_1.5_hlr"
@@ -43,12 +44,14 @@ DATA_ARGS=(
     #--video_column "videos.txt" #"videos_matching.txt"
     --image_column "images_filtered4.txt"
     --video_column "videos_filtered4.txt" #"videos_matching.txt"
+    #--image_column "images_filtered3.txt"
+    #--video_column "videos_filtered3.txt" #"videos_matching.txt"
     #--image_column "images_gen_new_debug.txt"
     #--video_column "videos_gen_new_debug.txt" #"videos_matching.txt"
-    #--train_resolution "81x368x640"  # (frames x height x width), frames should be 8N+1
+    --train_resolution "81x368x640"  # (frames x height x width), frames should be 8N+1
     #--train_resolution "81x352x640"  # (frames x height x width), frames should be 8N+1
-    --train_resolution "49x352x640"  # (frames x height x width), frames should be 8N+1
-    --encode_online 1
+    #--train_resolution "49x352x640"  # (frames x height x width), frames should be 8N+1
+    #--encode_online 1
 
 )
 
@@ -56,7 +59,7 @@ DATA_ARGS=(
 TRAIN_ARGS=(
     --train_epochs 100 # number of training epochs
     --seed 42 # random seed
-    --batch_size  8
+    --batch_size  4
     --gradient_accumulation_steps 1
     --mixed_precision "bf16" #"fp16" #"bf16"  # ["no", "fp16"] # Only CogVideoX-2B supports fp16 training
     --learning_rate 0.0002 #2e-5
@@ -72,7 +75,7 @@ SYSTEM_ARGS=(
 # Checkpointing Configuration
 CHECKPOINT_ARGS=(
     --checkpointing_steps 200 #100 # save checkpoint every x steps
-    --checkpointing_limit 4 # maximum number of checkpoints to keep, after which the oldest one is deleted
+    --checkpointing_limit 2 # maximum number of checkpoints to keep, after which the oldest one is deleted
   #  --resume_from_checkpoint "/absolute/path/to/checkpoint_dir"  # if you want to resume from a checkpoint, otherwise, comment this line
 )
 
@@ -104,7 +107,7 @@ echo "SLURM_NODEID=$SLURM_NODEID"
 
 
 # Combine all arguments and launch training
-#accelerate launch train.py \
+accelerate launch train.py \
 accelerate launch --config_file accelerate_config.yaml \
     --num_machines=$SLURM_NNODES \
     --num_processes=$ACCEL_PROCS \

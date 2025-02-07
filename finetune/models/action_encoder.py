@@ -6,6 +6,7 @@ from torch import nn
 import torch.nn.functional as F
 
 from diffusers import ConfigMixin
+from einops import rearrange
 
 from diffusers.loaders import PeftAdapterMixin
 from diffusers.utils import (
@@ -90,7 +91,7 @@ class ActionEncoder(nn.Module):
     Encodes a dictionary of discrete/continuous actions into a sequence of embeddings.
     """
 
-    def __init__(self, hidden_dim=64, out_dim=None):
+    def __init__(self, hidden_dim=64, out_dim=None, group_size=4):
         """
         Args:
             hidden_dim (int): Size of the output embedding dimension.
@@ -99,6 +100,8 @@ class ActionEncoder(nn.Module):
         super().__init__()
         
         self.hidden_dim = hidden_dim
+        self.group_size = group_size
+        self.out_dim = out_dim
 
         # Binary action embeddings
         self.w_embedding = nn.Embedding(2, hidden_dim)
@@ -123,12 +126,18 @@ class ActionEncoder(nn.Module):
         self.frame_embedding_table = nn.Embedding(160, hidden_dim * 10)
 
         # Mask token for missing actions
-        self.mask_token = nn.Parameter(torch.randn(1, hidden_dim * 10))
+        mask_dim = hidden_dim * group_size if group_size is not None else hidden_dim * 10
+        self.mask_token = nn.Parameter(torch.randn(1, mask_dim))
+        
 
         # Output transformation (if necessary)
         layer_dim = hidden_dim * 10 if out_dim is None else out_dim
         if out_dim is not None:
-            self.final_ffn = nn.Linear(hidden_dim * 10, out_dim)
+            if group_size is None:
+                self.final_ffn = nn.Linear(hidden_dim * 10, out_dim)
+            else:
+                self.final_ffn = nn.Linear(hidden_dim * group_size, out_dim)
+                #self.final_ffn = nn.Linear(hidden_dim * group_size, out_dim)
         else:
             self.final_ffn = None
 
@@ -231,6 +240,36 @@ class ActionEncoder(nn.Module):
             w_emb, a_emb, s_emb, d_emb, space_emb, shift_emb,
             dx_emb, dy_emb, mouse1_emb, mouse2_emb
         ]
+
+        if True:
+            all_discrete = torch.cat([w_emb, a_emb, s_emb, d_emb, space_emb, shift_emb, mouse1_emb, mouse2_emb], dim=1)
+            out_stacked = add_sinusoidal_positional_encoding(all_discrete, all_discrete.shape[-1])
+            out_seq = rearrange(out_stacked, 'b (t g) c -> b t (g c)', g=self.group_size, t=T*8//self.group_size)
+            discrete_seq = self.pad_sequence_with_mask_token(out_seq, sequence_length) # (B, sequence_length, 8*hidden_dim)
+
+
+            all_continuous = torch.cat([dx_emb, dy_emb], dim=2) # (B, T, 2*hidden_dim)
+            continuous_seq = rearrange(all_continuous, 'b (t g) c -> b t (g c)', g=self.group_size, t=T//self.group_size)
+            print(discrete_seq.shape, continuous_seq.shape)
+            continuous_seq = self.final_ffn(continuous_seq)
+
+            return discrete_seq, continuous_seq
+
+
+        if self.group_size is not None:
+            assert T % self.group_size == 0, "T must be divisible by group_size"
+            #out_stacked = torch.cat(all_per_frame, dim=2) # (B, T, 10 * self.hidden_dim)
+            #out_seq = add_sinusoidal_positional_encoding(out_stacked, out_stacked.shape[-1])
+            #out_seq = rearrange(out_stacked, 'b t (s c) -> b (t s) c', s=10, c=self.hidden_dim) # (B, T*10, hidden_dim)
+            #out_seq = rearrange(out_seq, 'b (t g) c -> b t (g c)', g=4, )
+            out_stacked = torch.cat(all_per_frame, dim=1) # (b, t*10, self.hidden_dim)
+            out_seq = add_sinusoidal_positional_encoding(out_stacked, out_stacked.shape[-1])
+            out_seq = rearrange(out_seq, 'b (t g) c -> b t (g c)', g=self.group_size, t=t*10//self.group_size)
+            if sequence_length is not None and out_seq.shape[1] < sequence_length:
+                out_seq = self.pad_sequence_with_mask_token(out_seq, sequence_length) # (B, sequence_length, 10*hidden_dim)
+            out_seq = self.final_ffn(out_seq)
+            return out_seq
+            
         out_stacked = torch.cat(all_per_frame, dim=2) # (B, T, 10 * self.hidden_dim)
 
         # -----------------------------------------------------
@@ -248,8 +287,6 @@ class ActionEncoder(nn.Module):
         frame_ids = torch.arange(T, device=space_emb.device)  # (T,)
         frame_embs = self.frame_embedding_table(frame_ids)  # (T, hidden_dim * 10)
         frame_embs = frame_embs.unsqueeze(0).expand(B, T, self.hidden_dim * 10)
-
-        # Add the frame embedding to each of the 10 slots
         out_with_time = out_stacked + frame_embs
 
         # -----------------------------------------------------
@@ -290,7 +327,7 @@ class ActionEncoder(nn.Module):
         """
         # just w
         wasd = torch.zeros(batch_size, num_frames, 4).float()
-        wasd[:, :, 0] = 1
+        wasd[:, :, 1] = 1
         space = torch.zeros(batch_size, num_frames)
         shift = torch.zeros(batch_size, num_frames)
         mouse_1 = torch.zeros(batch_size, num_frames)

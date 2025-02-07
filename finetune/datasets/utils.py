@@ -47,9 +47,9 @@ def format_action_string(action_dict):
             active_actions.append(f'dx:{dx:.1f} dy:{dy:.1f}')
         
         # Format the frame output
-        formatted_lines.append(f'Frame {frame_idx + 1}: {", ".join(active_actions)} |')
+        formatted_lines.append(f'T {frame_idx + 1}: {", ".join(active_actions)} |')
     
-    return '\n'.join(formatted_lines)
+    return ' | '.join(formatted_lines)
 
 def load_prompts(prompt_path: Path) -> List[str]:
     with open(prompt_path, "r", encoding="utf-8") as file:

@@ -5,7 +5,7 @@
 #SBATCH --time=12:00:00
 #SBATCH --partition=normal
 #SBATCH --ntasks=1
-#SBATCH --environment=gem
+#SBATCH --environment=mem_wm
 #SBATCH --container-workdir=/users/sstapf/test_data
 
 
@@ -16,7 +16,7 @@
 
 #srun python download_dataset.py --output-dir="/capstor/store/cscs/swissai/a03/datasets/ego2d/10" --json-files "/users/sstapf/test_data/build-house-Jul-28.json"
 # -----------------
-#srun python download_dataset.py --output-dir="/capstor/store/cscs/swissai/a03/datasets/ego2d/11" --json-file "/users/sstapf/test_data/find-cave-Jul-28.json"
+srun python download_dataset.py --output-dir="/capstor/store/cscs/swissai/a03/datasets/ego2d/11" --json-file "/users/sstapf/test_data/find-cave-Jul-28.json"
 #srun python download_dataset.py --output-dir="/capstor/store/cscs/swissai/a03/datasets/ego2d/12" --json-file "/users/sstapf/test_data/waterfall-Jul-28.json"
 #srun python download_dataset.py --output-dir="/capstor/store/cscs/swissai/a03/datasets/ego2d/13" --json-file "/users/sstapf/test_data/pen-animals-Jul-28.json"
 #srun python download_dataset.py --output-dir="/capstor/store/cscs/swissai/a03/datasets/ego2d/14" --json-file "/users/sstapf/test_data/build-house-Jul-28.json"
@@ -27,4 +27,4 @@
 
 
 #srun python transform.py
-srun python transform_eval.py
+#srun python transform_eval.py

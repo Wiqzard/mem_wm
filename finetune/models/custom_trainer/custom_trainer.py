@@ -148,7 +148,7 @@ class CogVideoXI2VCustomTrainer(Trainer):
                 encoded_videos = self.encode_video(batch["videos"].squeeze(1))
                 #encoded_videos = [self.encode_video(video) for video in batch["videos"]]
                 #encoded_videos = torch.stack(encoded_videos).squeeze(1)
-                latent = encoded_videos
+                latent = encoded_videos.to(self.accelerator.device)
         else:
             latent = batch["encoded_videos"].to(self.accelerator.device)
         
@@ -248,7 +248,6 @@ class CogVideoXI2VCustomTrainer(Trainer):
             else latent.new_full((1,), fill_value=2.0)
         )
 
-        uc = bool(torch.rand(1) < 0.2)
         predicted_noise = self.components.transformer(
             hidden_states=latent_img_noisy,
             encoder_hidden_states=None,  # prompt_embedding,
@@ -257,8 +256,8 @@ class CogVideoXI2VCustomTrainer(Trainer):
             image_rotary_emb=rotary_emb,
             return_dict=False,
             actions=actions,
-            uc=uc,
-            mask_ratio=0.1
+            uc=False, #bool(torch.rand(1) < 0.2)
+            mask_ratio=0.0, # 0.1
         )[0]
 
         # Denoise
@@ -299,7 +298,8 @@ class CogVideoXI2VCustomTrainer(Trainer):
             image=image,
             actions=actions,
             generator=self.state.generator,
-            guidance_scale=6
+            guidance_scale=1,
+            dtype=self.components.vae.dtype,
             
         ).frames[0]
         return [("video", video_generate)]

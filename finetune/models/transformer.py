@@ -395,7 +395,7 @@ class CogVideoXTransformer3DActionModel(ModelMixin, ConfigMixin, PeftAdapterMixi
                 "embeddings. If you're using a custom model and/or believe this should be supported, please open an "
                 "issue at https://github.com/huggingface/diffusers/issues."
             )
-        self.action_encoder = ActionEncoder(hidden_dim=128, out_dim=text_embed_dim)
+        self.action_encoder = ActionEncoder(hidden_dim=128, out_dim=text_embed_dim, group_size=4)
         # 1. Patch embedding
         self.patch_embed = CogVideoXPatchEmbed(
             patch_size=patch_size,
@@ -561,7 +561,6 @@ class CogVideoXTransformer3DActionModel(ModelMixin, ConfigMixin, PeftAdapterMixi
 
         if uc:
             encoded_actions = self.action_encoder(actions, uc=True,  sequence_length=sequence_length)
-
         else:
             encoded_actions = self.action_encoder(actions, uc=False, mask_ratio=mask_ratio,  sequence_length=sequence_length)
 
@@ -647,8 +646,6 @@ class CogVideoXTransformer3DActionModel(ModelMixin, ConfigMixin, PeftAdapterMixi
                     encoder_hidden_states,
                     emb,
                     image_rotary_emb,
-                    # actions=actions,
-                    # uc=uc,
                     **ckpt_kwargs,
                 )
             else:
@@ -657,8 +654,6 @@ class CogVideoXTransformer3DActionModel(ModelMixin, ConfigMixin, PeftAdapterMixi
                     encoder_hidden_states=encoder_hidden_states,
                     temb=emb,
                     image_rotary_emb=image_rotary_emb,
-                    # actions=actions,
-                    # uc=uc
                 )
         if not self.config.use_rotary_positional_embeddings:
             # CogVideoX-2B
