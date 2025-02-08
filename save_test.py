@@ -35,7 +35,7 @@ model_state_dict = transformer.state_dict()
 
 filtered_state_dict = {k: v for k, v in state_dict.items() if k in model_state_dict and v.shape == model_state_dict[k].shape}
 transformer.load_state_dict(filtered_state_dict, strict=False)
-transformer.save_pretrained("outputs/transformer_2b_iv_grp")
+transformer.save_pretrained("outputs/transformer_2b_iv_grp_2")
 
 # check whether the parameters agree
 reloaded_model = CogVideoXTransformer3DActionModel.from_pretrained("outputs/transformer_2b_iv_grp")

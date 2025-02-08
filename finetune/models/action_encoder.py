@@ -91,7 +91,7 @@ class ActionEncoder(nn.Module):
     Encodes a dictionary of discrete/continuous actions into a sequence of embeddings.
     """
 
-    def __init__(self, hidden_dim=64, out_dim=None, group_size=4):
+    def __init__(self, hidden_dim=64, out_dim=None, inner_dim=1920, group_size=4):
         """
         Args:
             hidden_dim (int): Size of the output embedding dimension.
@@ -130,6 +130,8 @@ class ActionEncoder(nn.Module):
         self.mask_token = nn.Parameter(torch.randn(1, mask_dim))
         
 
+        #self.discrete_ffn = nn.Linear(4*hidden_dim, out_dim)
+        #self.continuous_ffn = nn.Linear(8*hidden_dim, inner_dim)
         # Output transformation (if necessary)
         layer_dim = hidden_dim * 10 if out_dim is None else out_dim
         if out_dim is not None:
@@ -172,6 +174,14 @@ class ActionEncoder(nn.Module):
         if self.final_ffn is not None:
             nn.init.xavier_uniform_(self.final_ffn.weight)
             nn.init.zeros_(self.final_ffn.bias)
+        
+       # if self.continuous_ffn is not None:
+       #     nn.init.xavier_uniform_(self.continuous_ffn.weight)
+       #     nn.init.zeros_(self.continuous_ffn.bias)
+       # 
+       # if self.discrete_ffn is not None:
+       #     nn.init.xavier_uniform_(self.discrete_ffn.weight)
+       #     nn.init.zeros_(self.discrete_ffn.bias)
 
         # Normal initialization for mask token
         nn.init.normal_(self.mask_token, mean=0.0, std=0.02)
@@ -241,17 +251,17 @@ class ActionEncoder(nn.Module):
             dx_emb, dy_emb, mouse1_emb, mouse2_emb
         ]
 
-        if True:
+        if False:
             all_discrete = torch.cat([w_emb, a_emb, s_emb, d_emb, space_emb, shift_emb, mouse1_emb, mouse2_emb], dim=1)
-            out_stacked = add_sinusoidal_positional_encoding(all_discrete, all_discrete.shape[-1])
+            out_stacked = add_sinusoidal_positional_encoding(all_discrete, all_discrete.shape[-1]).to(all_discrete.dtype)
             out_seq = rearrange(out_stacked, 'b (t g) c -> b t (g c)', g=self.group_size, t=T*8//self.group_size)
             discrete_seq = self.pad_sequence_with_mask_token(out_seq, sequence_length) # (B, sequence_length, 8*hidden_dim)
+            discrete_seq = self.discrete_ffn(discrete_seq)
 
 
             all_continuous = torch.cat([dx_emb, dy_emb], dim=2) # (B, T, 2*hidden_dim)
             continuous_seq = rearrange(all_continuous, 'b (t g) c -> b t (g c)', g=self.group_size, t=T//self.group_size)
-            print(discrete_seq.shape, continuous_seq.shape)
-            continuous_seq = self.final_ffn(continuous_seq)
+            continuous_seq = self.continuous_ffn(continuous_seq)
 
             return discrete_seq, continuous_seq
 
@@ -264,7 +274,8 @@ class ActionEncoder(nn.Module):
             #out_seq = rearrange(out_seq, 'b (t g) c -> b t (g c)', g=4, )
             out_stacked = torch.cat(all_per_frame, dim=1) # (b, t*10, self.hidden_dim)
             out_seq = add_sinusoidal_positional_encoding(out_stacked, out_stacked.shape[-1])
-            out_seq = rearrange(out_seq, 'b (t g) c -> b t (g c)', g=self.group_size, t=t*10//self.group_size)
+            out_seq = out_seq.to(out_stacked.dtype)
+            out_seq = rearrange(out_seq, 'b (t g) c -> b t (g c)', g=self.group_size, t=T*10//self.group_size)
             if sequence_length is not None and out_seq.shape[1] < sequence_length:
                 out_seq = self.pad_sequence_with_mask_token(out_seq, sequence_length) # (B, sequence_length, 10*hidden_dim)
             out_seq = self.final_ffn(out_seq)

@@ -18,15 +18,15 @@ MODEL_ARGS=(
     #--training_type "lora"
     #--encoder_path 
     #--local_path /capstor/scratch/cscs/sstapf/mem_wm/outputs/transformer_5b
-    #--local_path /capstor/scratch/cscs/sstapf/mem_wm/outputs/transformer_2b_iv
-    --local_path /capstor/scratch/cscs/sstapf/mem_wm/finetune/outputs/outputs_2_hlr_49/checkpoint-2000
+    --local_path /capstor/scratch/cscs/sstapf/mem_wm/outputs/transformer_2b_iv_grp_2
+    #--local_path /capstor/scratch/cscs/sstapf/mem_wm/finetune/outputs/outputs_2_hlr_49/checkpoint-2000
     #--local_path /capstor/scratch/cscs/sstapf/mem_wm/finetune/outputs/outputs_1.5_hlr/checkpoint-3400
 )
 
 # Output Configuration
 OUTPUT_ARGS=(
    #--output_dir "outputs/outputs_2_hlr_81_cached_fp16"
-    --output_dir "outputs/outputs_2_hlr_49_cont"
+    --output_dir "outputs/training_hlr_49_grp" #outputs_2_hlr_49_cont"
     #--output_dir "outputs/outputs_1.5_hlr_cont"
     #--output_dir "outputs/outputs_2_hlr_49_fp16"
     #--output_dir "outputs/outputs_1.5_hlr"
@@ -56,10 +56,10 @@ DATA_ARGS=(
 TRAIN_ARGS=(
     --train_epochs 100 # number of training epochs
     --seed 42 # random seed
-    --batch_size  8
+    --batch_size  8 #16
     --gradient_accumulation_steps 1
     --mixed_precision "bf16" #"fp16" #"bf16"  # ["no", "fp16"] # Only CogVideoX-2B supports fp16 training
-    --learning_rate 0.0002 #2e-5
+    --learning_rate 0.0006 #2e-5
 )
 
 # System Configuration

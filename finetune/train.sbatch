@@ -2,7 +2,7 @@
 #SBATCH --job-name=dw
 #SBATCH --output=outputs/slurm/train_%j.log
 #SBATCH --error=outputs/slurm/train_%j.err
-#SBATCH --time=10:00:00
+#SBATCH --time=12:00:00
 #SBATCH --partition=normal
 #SBATCH --ntasks-per-node=1
 #SBATCH --gpus-per-node=4

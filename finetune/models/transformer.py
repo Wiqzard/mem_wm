@@ -29,6 +29,7 @@ from diffusers.models.modeling_outputs import Transformer2DModelOutput
 from diffusers.models.modeling_utils import ModelMixin
 from diffusers.models.normalization import AdaLayerNorm, CogVideoXLayerNormZero
 
+from einops import rearrange, repeat
 from finetune.models.action_encoder import ActionEncoder
 
 
@@ -395,7 +396,7 @@ class CogVideoXTransformer3DActionModel(ModelMixin, ConfigMixin, PeftAdapterMixi
                 "embeddings. If you're using a custom model and/or believe this should be supported, please open an "
                 "issue at https://github.com/huggingface/diffusers/issues."
             )
-        self.action_encoder = ActionEncoder(hidden_dim=128, out_dim=text_embed_dim, group_size=4)
+        self.action_encoder = ActionEncoder(hidden_dim=128, out_dim=text_embed_dim, inner_dim=num_attention_heads*attention_head_dim, group_size=4)
         # 1. Patch embedding
         self.patch_embed = CogVideoXPatchEmbed(
             patch_size=patch_size,
@@ -610,8 +611,13 @@ class CogVideoXTransformer3DActionModel(ModelMixin, ConfigMixin, PeftAdapterMixi
             emb = emb + ofs_emb
 
         encoded_actions = self.encode_actions(
-            actions, uc=uc, device=hidden_states.device, dtype=hidden_states.dtype, cfg=cfg, mask_ratio=mask_ratio
+           actions, uc=uc, device=hidden_states.device, dtype=hidden_states.dtype, cfg=cfg, mask_ratio=mask_ratio
         )
+
+        if False:
+            encoded_actions, continuous_actions  = self.encode_actions(
+                actions, uc=uc, device=hidden_states.device, dtype=hidden_states.dtype, cfg=cfg, mask_ratio=mask_ratio
+            )
 
         if encoder_hidden_states is not None:
             encoder_hidden_states = torch.cat([encoder_hidden_states, encoded_actions], dim=1)
@@ -626,6 +632,12 @@ class CogVideoXTransformer3DActionModel(ModelMixin, ConfigMixin, PeftAdapterMixi
         text_seq_length = encoder_hidden_states.shape[1]
         encoder_hidden_states = hidden_states[:, :text_seq_length]
         hidden_states = hidden_states[:, text_seq_length:]
+
+        if False:
+            hidden_states = rearrange(hidden_states, "b (t s) c -> b t s c", t=num_frames) 
+            continuous_actions = repeat(continuous_actions, 'b t c -> b t s c', s=hidden_states.shape[2])
+            hidden_states[:, 1:, :, :] = hidden_states[:, 1:, :, :] + continuous_actions
+            hidden_states = rearrange(hidden_states, "b t s c -> b (t s) c")
 
         # 3. Transformer blocks
         for i, block in enumerate(self.transformer_blocks):
@@ -720,7 +732,6 @@ config_5b = {
     "use_learned_positional_embeddings": False,
     "use_rotary_positional_embeddings": True,
 }
-
 config_2b_iv = {
     "activation_fn": "gelu-approximate",
     "attention_bias": True,

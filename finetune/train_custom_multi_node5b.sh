@@ -40,10 +40,12 @@ DATA_ARGS=(
     --data_root "/capstor/store/cscs/swissai/a03/datasets/ego4d_mc/train_set"
     --caption_column "prompts.txt"
 
-    #--image_column "images.txt"
-    #--video_column "videos.txt" #"videos_matching.txt"
-    --image_column "images_filtered4.txt"
-    --video_column "videos_filtered4.txt" #"videos_matching.txt"
+    --image_column "images_100.txt"
+    --video_column "videos_100.txt" #"videos_matching.txt"
+
+    #--image_column "images_filtered4.txt"
+    #--video_column "videos_filtered4.txt" #"videos_matching.txt"
+
     #--image_column "images_filtered3.txt"
     #--video_column "videos_filtered3.txt" #"videos_matching.txt"
     #--image_column "images_gen_new_debug.txt"
