@@ -200,7 +200,13 @@ class ActionEncoder(nn.Module):
         """
         Args:
             actions is a dictionary containing:
-                "wasd":    (B, T, 4) one-hot for W, A, S, D
+                "w":       (B, T) 
+                "a":       (B, T)
+                "s":       (B, T)
+                "d":       (B, T)
+                "e":       (B, T)
+                "esc":     (B, T)
+                "dwheel":  (B, T)
                 "space":   (B, T)
                 "shift":   (B, T)
                 "mouse_1": (B, T)
@@ -218,12 +224,19 @@ class ActionEncoder(nn.Module):
         # -----------------------------------------------------
         # 1) W, A, S, D embeddings (binary: 0 or 1)
         # -----------------------------------------------------
-        wasd = actions["wasd"]  # (B, T, 4)
+        #wasd = actions["wasd"]  # (B, T, 4)
+        #w_emb = self.w_embedding(wasd[:, :, 0].long())  # (B, T, hidden_dim)
+        #a_emb = self.a_embedding(wasd[:, :, 1].long())  # (B, T, hidden_dim)
+        #s_emb = self.s_embedding(wasd[:, :, 2].long())  # (B, T, hidden_dim)
+        #d_emb = self.d_embedding(wasd[:, :, 3].long())  # (B, T, hidden_dim)
 
-        w_emb = self.w_embedding(wasd[:, :, 0].long())  # (B, T, hidden_dim)
-        a_emb = self.a_embedding(wasd[:, :, 1].long())  # (B, T, hidden_dim)
-        s_emb = self.s_embedding(wasd[:, :, 2].long())  # (B, T, hidden_dim)
-        d_emb = self.d_embedding(wasd[:, :, 3].long())  # (B, T, hidden_dim)
+        w_emb = self.w_embedding(actions["w"].long())  # (B, T, hidden_dim)
+        a_emb = self.a_embedding(actions["a"].long())  # (B, T, hidden_dim)
+        s_emb = self.s_embedding(actions["s"].long())  # (B, T, hidden_dim)
+        d_emb = self.d_embedding(actions["d"].long())  # (B, T, hidden_dim)
+
+        #e_emb = self.e_embedding(actions["e"].long())  # (B, T, hidden_dim)
+        #dwheel_emb = self.dwheel_embedding(actions["dwheel"].long())  # (B, T, hidden_dim)
 
         # -----------------------------------------------------
         # 2) Space, shift, mouse_1, mouse_2 (binary: 0 or 1)

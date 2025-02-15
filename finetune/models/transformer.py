@@ -28,6 +28,7 @@ from diffusers.models.embeddings import TimestepEmbedding, Timesteps, get_3d_sin
 from diffusers.models.modeling_outputs import Transformer2DModelOutput
 from diffusers.models.modeling_utils import ModelMixin
 from diffusers.models.normalization import AdaLayerNorm, CogVideoXLayerNormZero
+from diffusers.models.embeddings import CogVideoXPatchEmbed, TimestepEmbedding, Timesteps
 
 from einops import rearrange, repeat
 from finetune.models.action_encoder import ActionEncoder
@@ -36,179 +37,8 @@ from finetune.models.action_encoder import ActionEncoder
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
 
 
-class CogVideoXPatchEmbed(nn.Module):
-    def __init__(
-        self,
-        patch_size: int = 2,
-        patch_size_t: Optional[int] = None,
-        in_channels: int = 16,
-        embed_dim: int = 1920,
-        text_embed_dim: int = 4096,
-        bias: bool = True,
-        sample_width: int = 90,
-        sample_height: int = 60,
-        sample_frames: int = 49,
-        temporal_compression_ratio: int = 4,
-        max_text_seq_length: int = 226,
-        spatial_interpolation_scale: float = 1.875,
-        temporal_interpolation_scale: float = 1.0,
-        use_positional_embeddings: bool = True,
-        use_learned_positional_embeddings: bool = True,
-    ) -> None:
-        super().__init__()
-
-        self.patch_size = patch_size
-        self.patch_size_t = patch_size_t
-        self.embed_dim = embed_dim
-        self.sample_height = sample_height
-        self.sample_width = sample_width
-        self.sample_frames = sample_frames
-        self.temporal_compression_ratio = temporal_compression_ratio
-        self.max_text_seq_length = max_text_seq_length
-        self.spatial_interpolation_scale = spatial_interpolation_scale
-        self.temporal_interpolation_scale = temporal_interpolation_scale
-        self.use_positional_embeddings = use_positional_embeddings
-        self.use_learned_positional_embeddings = use_learned_positional_embeddings
-
-        if patch_size_t is None:
-            # CogVideoX 1.0 checkpoints
-            self.proj = nn.Conv2d(
-                in_channels, embed_dim, kernel_size=(patch_size, patch_size), stride=patch_size, bias=bias
-            )
-        else:
-            # CogVideoX 1.5 checkpoints
-            self.proj = nn.Linear(in_channels * patch_size * patch_size * patch_size_t, embed_dim)
-
-        self.text_proj = nn.Linear(text_embed_dim, embed_dim)
-        #nn.init.zeros_(self.text_proj.weight)
-        #nn.init.zeros_(self.text_proj.bias)
-
-        if use_positional_embeddings or use_learned_positional_embeddings:
-            persistent = use_learned_positional_embeddings
-            pos_embedding = self._get_positional_embeddings(sample_height, sample_width, sample_frames)
-            self.register_buffer("pos_embedding", pos_embedding, persistent=persistent)
-
-
-    def _get_positional_embeddings(
-        self, sample_height: int, sample_width: int, sample_frames: int, device: Optional[torch.device] = None
-    ) -> torch.Tensor:
-        post_patch_height = sample_height // self.patch_size
-        post_patch_width = sample_width // self.patch_size
-        post_time_compression_frames = (sample_frames - 1) // self.temporal_compression_ratio + 1
-        num_patches = post_patch_height * post_patch_width * post_time_compression_frames
-
-        pos_embedding = get_3d_sincos_pos_embed(
-            self.embed_dim,
-            (post_patch_width, post_patch_height),
-            post_time_compression_frames,
-            self.spatial_interpolation_scale,
-            self.temporal_interpolation_scale,
-            device=device,
-            output_type="pt",
-        )
-        pos_embedding = pos_embedding.flatten(0, 1)
-        joint_pos_embedding = pos_embedding.new_zeros(
-            1, self.max_text_seq_length + num_patches, self.embed_dim, requires_grad=False
-        )
-        joint_pos_embedding.data[:, self.max_text_seq_length :].copy_(pos_embedding)
-
-        return joint_pos_embedding
-
-    def forward(self, text_embeds: torch.Tensor, image_embeds: torch.Tensor):
-        r"""
-        Args:
-            text_embeds (`torch.Tensor`):
-                Input text embeddings. Expected shape: (batch_size, seq_length, embedding_dim).
-            image_embeds (`torch.Tensor`):
-                Input image embeddings. Expected shape: (batch_size, num_frames, channels, height, width).
-        """
-        text_embeds = self.text_proj(text_embeds)
-
-        batch_size, num_frames, channels, height, width = image_embeds.shape
-
-        if self.patch_size_t is None:
-            image_embeds = image_embeds.reshape(-1, channels, height, width)
-            image_embeds = self.proj(image_embeds)
-            image_embeds = image_embeds.view(batch_size, num_frames, *image_embeds.shape[1:])
-            image_embeds = image_embeds.flatten(3).transpose(2, 3)  # [batch, num_frames, height x width, channels]
-            image_embeds = image_embeds.flatten(1, 2)  # [batch, num_frames x height x width, channels]
-        else:
-            p = self.patch_size
-            p_t = self.patch_size_t
-
-            image_embeds = image_embeds.permute(0, 1, 3, 4, 2)
-            image_embeds = image_embeds.reshape(
-                batch_size, num_frames // p_t, p_t, height // p, p, width // p, p, channels
-            )
-            image_embeds = image_embeds.permute(0, 1, 3, 5, 7, 2, 4, 6).flatten(4, 7).flatten(1, 3)
-            image_embeds = self.proj(image_embeds)
-
-        embeds = torch.cat(
-            [text_embeds, image_embeds], dim=1
-        ).contiguous()  # [batch, seq_length + num_frames x height x width, channels]
-
-        if self.use_positional_embeddings or self.use_learned_positional_embeddings:
-            if self.use_learned_positional_embeddings and (self.sample_width != width or self.sample_height != height):
-                raise ValueError(
-                    "It is currently not possible to generate videos at a different resolution that the defaults. This should only be the case with 'THUDM/CogVideoX-5b-I2V'."
-                    "If you think this is incorrect, please open an issue at https://github.com/huggingface/diffusers/issues."
-                )
-
-            pre_time_compression_frames = (num_frames - 1) * self.temporal_compression_ratio + 1
-
-            if (
-                self.sample_height != height
-                or self.sample_width != width
-                or self.sample_frames != pre_time_compression_frames
-            ):
-                pos_embedding = self._get_positional_embeddings(
-                    height, width, pre_time_compression_frames, device=embeds.device
-                )
-            else:
-                pos_embedding = self.pos_embedding
-
-            pos_embedding = pos_embedding.to(dtype=embeds.dtype)
-            embeds = embeds + pos_embedding
-
-        return embeds
-
-
 @maybe_allow_in_graph
 class CogVideoXBlock(nn.Module):
-    r"""
-    Transformer block used in [CogVideoX](https://github.com/THUDM/CogVideo) model.
-
-    Parameters:
-        dim (`int`):
-            The number of channels in the input and output.
-        num_attention_heads (`int`):
-            The number of heads to use for multi-head attention.
-        attention_head_dim (`int`):
-            The number of channels in each head.
-        time_embed_dim (`int`):
-            The number of channels in timestep embedding.
-        dropout (`float`, defaults to `0.0`):
-            The dropout probability to use.
-        activation_fn (`str`, defaults to `"gelu-approximate"`):
-            Activation function to be used in feed-forward.
-        attention_bias (`bool`, defaults to `False`):
-            Whether or not to use bias in attention projection layers.
-        qk_norm (`bool`, defaults to `True`):
-            Whether or not to use normalization after query and key projections in Attention.
-        norm_elementwise_affine (`bool`, defaults to `True`):
-            Whether to use learnable elementwise affine parameters for normalization.
-        norm_eps (`float`, defaults to `1e-5`):
-            Epsilon value for normalization layers.
-        final_dropout (`bool` defaults to `False`):
-            Whether to apply a final dropout after the last feed-forward layer.
-        ff_inner_dim (`int`, *optional*, defaults to `None`):
-            Custom hidden dimension of Feed-forward layer. If not provided, `4 * dim` is used.
-        ff_bias (`bool`, defaults to `True`):
-            Whether or not to use bias in Feed-forward layer.
-        attention_out_bias (`bool`, defaults to `True`):
-            Whether or not to use bias in Attention output projection layer.
-    """
-
     def __init__(
         self,
         dim: int,
@@ -228,6 +58,8 @@ class CogVideoXBlock(nn.Module):
     ):
         super().__init__()
 
+        self.dim = dim
+        self.ff_inner_dim = ff_inner_dim
         # 1. Self Attention
         self.norm1 = CogVideoXLayerNormZero(
             time_embed_dim, dim, norm_elementwise_affine, norm_eps, bias=True
@@ -290,72 +122,21 @@ class CogVideoXBlock(nn.Module):
         # feed-forward
         norm_hidden_states = torch.cat([norm_encoder_hidden_states, norm_hidden_states], dim=1)
         ff_output = self.ff(norm_hidden_states)
+        if isinstance(ff_output, tuple):
+            ff_output, routing_weights = ff_output
+        else:
+            routing_weights = None
 
         hidden_states = hidden_states + gate_ff * ff_output[:, text_seq_length:]
         encoder_hidden_states = (
             encoder_hidden_states + enc_gate_ff * ff_output[:, :text_seq_length]
         )
 
-        return hidden_states, encoder_hidden_states
+        return hidden_states, encoder_hidden_states, routing_weights
 
 
 class CogVideoXTransformer3DActionModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
-    """
-    A Transformer model for video-like data in [CogVideoX](https://github.com/THUDM/CogVideo).
-    Parameters:
-        num_attention_heads (`int`, defaults to `30`):
-            The number of heads to use for multi-head attention.
-        attention_head_dim (`int`, defaults to `64`):
-            The number of channels in each head.
-        in_channels (`int`, defaults to `16`):
-            The number of channels in the input.
-        out_channels (`int`, *optional*, defaults to `16`):
-            The number of channels in the output.
-        flip_sin_to_cos (`bool`, defaults to `True`):
-            Whether to flip the sin to cos in the time embedding.
-        time_embed_dim (`int`, defaults to `512`):
-            Output dimension of timestep embeddings.
-        ofs_embed_dim (`int`, defaults to `512`):
-            Output dimension of "ofs" embeddings used in CogVideoX-5b-I2B in version 1.5
-        text_embed_dim (`int`, defaults to `4096`):
-            Input dimension of text embeddings from the text encoder.
-        num_layers (`int`, defaults to `30`):
-            The number of layers of Transformer blocks to use.
-        dropout (`float`, defaults to `0.0`):
-            The dropout probability to use.
-        attention_bias (`bool`, defaults to `True`):
-            Whether to use bias in the attention projection layers.
-        sample_width (`int`, defaults to `90`):
-            The width of the input latents.
-        sample_height (`int`, defaults to `60`):
-            The height of the input latents.
-        sample_frames (`int`, defaults to `49`):
-            The number of frames in the input latents. Note that this parameter was incorrectly initialized to 49
-            instead of 13 because CogVideoX processed 13 latent frames at once in its default and recommended settings,
-            but cannot be changed to the correct value to ensure backwards compatibility. To create a transformer with
-            K latent frames, the correct value to pass here would be: ((K - 1) * temporal_compression_ratio + 1).
-        patch_size (`int`, defaults to `2`):
-            The size of the patches to use in the patch embedding layer.
-        temporal_compression_ratio (`int`, defaults to `4`):
-            The compression ratio across the temporal dimension. See documentation for `sample_frames`.
-        max_text_seq_length (`int`, defaults to `226`):
-            The maximum sequence length of the input text embeddings.
-        activation_fn (`str`, defaults to `"gelu-approximate"`):
-            Activation function to use in feed-forward.
-        timestep_activation_fn (`str`, defaults to `"silu"`):
-            Activation function to use when generating the timestep embeddings.
-        norm_elementwise_affine (`bool`, defaults to `True`):
-            Whether to use elementwise affine in normalization layers.
-        norm_eps (`float`, defaults to `1e-5`):
-            The epsilon value to use in normalization layers.
-        spatial_interpolation_scale (`float`, defaults to `1.875`):
-            Scaling factor to apply in 3D positional embeddings across spatial dimensions.
-        temporal_interpolation_scale (`float`, defaults to `1.0`):
-            Scaling factor to apply in 3D positional embeddings across temporal dimensions.
-    """
-
     _supports_gradient_checkpointing = True
-
     @register_to_config
     def __init__(
         self,
@@ -397,6 +178,7 @@ class CogVideoXTransformer3DActionModel(ModelMixin, ConfigMixin, PeftAdapterMixi
                 "issue at https://github.com/huggingface/diffusers/issues."
             )
         self.action_encoder = ActionEncoder(hidden_dim=128, out_dim=text_embed_dim, inner_dim=num_attention_heads*attention_head_dim, group_size=4)
+        #self.action_encoder = ActionEncoder(hidden_dim=128, out_dim=text_embed_dim, inner_dim=num_attention_heads*attention_head_dim, group_size=4)
         # 1. Patch embedding
         self.patch_embed = CogVideoXPatchEmbed(
             patch_size=patch_size,
@@ -460,6 +242,171 @@ class CogVideoXTransformer3DActionModel(ModelMixin, ConfigMixin, PeftAdapterMixi
             output_dim = patch_size * patch_size * patch_size_t * out_channels
         self.proj_out = nn.Linear(inner_dim, output_dim)
         self.gradient_checkpointing = False
+
+    def encode_actions(self, actions: Dict[str, Any], uc=False, device=None, dtype=None, cfg=False, mask_ratio=0.0, sequence_length=226):
+        B, T = actions["dx"].shape
+        actions = {k: v.to(device, dtype=dtype) for k, v in actions.items()}
+        if cfg:
+            encoded_uc_actions = self.action_encoder(actions, uc=True, sequence_length=sequence_length)
+            encoded_actions = self.action_encoder(actions, uc=False, sequence_length=sequence_length)
+            encoded_actions = torch.cat([encoded_actions, encoded_uc_actions], dim=0)
+            return encoded_actions
+
+        if uc:
+            encoded_actions = self.action_encoder(actions, uc=True,  sequence_length=sequence_length)
+        else:
+            encoded_actions = self.action_encoder(actions, uc=False, mask_ratio=mask_ratio,  sequence_length=sequence_length)
+
+        return encoded_actions
+
+    def forward(
+        self,
+        hidden_states: torch.Tensor,
+        encoder_hidden_states: torch.Tensor,
+        timestep: Union[int, float, torch.LongTensor],
+        timestep_cond: Optional[torch.Tensor] = None,
+        ofs: Optional[Union[int, float, torch.LongTensor]] = None,
+        image_rotary_emb: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
+        attention_kwargs: Optional[Dict[str, Any]] = None,
+        return_dict: bool = True,
+        actions: Optional[torch.Tensor] = None,
+        cfg: Optional[Dict[str, Any]] = False,
+        uc: bool = False,
+        mask_ratio: float = 0.0,
+    ):
+        if attention_kwargs is not None:
+            attention_kwargs = attention_kwargs.copy()
+            lora_scale = attention_kwargs.pop("scale", 1.0)
+        else:
+            lora_scale = 1.0
+        if USE_PEFT_BACKEND:
+            # weight the lora layers by setting `lora_scale` for each PEFT layer
+            scale_lora_layers(self, lora_scale)
+        else:
+            if attention_kwargs is not None and attention_kwargs.get("scale", None) is not None:
+                logger.warning(
+                    "Passing `scale` via `attention_kwargs` when not using the PEFT backend is ineffective."
+                )
+        batch_size, num_frames, channels, height, width = hidden_states.shape
+        # 1. Time embedding
+        timesteps = timestep
+        t_emb = self.time_proj(timesteps)
+        # timesteps does not contain any weights and will always return f32 tensors
+        # but time_embedding might actually be running in fp16. so we need to cast here.
+        # there might be better ways to encapsulate this.
+        t_emb = t_emb.to(dtype=hidden_states.dtype)
+        emb = self.time_embedding(t_emb, timestep_cond)
+        if self.ofs_embedding is not None:
+            ofs_emb = self.ofs_proj(ofs)
+            ofs_emb = ofs_emb.to(dtype=hidden_states.dtype)
+            ofs_emb = self.ofs_embedding(ofs_emb)
+            emb = emb + ofs_emb
+
+        encoded_actions = self.encode_actions(
+           actions, uc=uc, device=hidden_states.device, dtype=hidden_states.dtype, cfg=cfg, mask_ratio=mask_ratio
+        )
+
+        if False:
+            encoded_actions, continuous_actions  = self.encode_actions(
+                actions, uc=uc, device=hidden_states.device, dtype=hidden_states.dtype, cfg=cfg, mask_ratio=mask_ratio
+            )
+
+        if encoder_hidden_states is not None:
+            encoder_hidden_states = torch.cat([encoder_hidden_states, encoded_actions], dim=1)
+            assert encoder_hidden_states.shape[1] == self.max_text_seq_length
+        else:
+            encoder_hidden_states = encoded_actions
+
+        # 2. Patch embedding
+        hidden_states = self.patch_embed(encoder_hidden_states, hidden_states)
+        hidden_states = self.embedding_dropout(hidden_states)
+
+        text_seq_length = encoder_hidden_states.shape[1]
+        encoder_hidden_states = hidden_states[:, :text_seq_length]
+        hidden_states = hidden_states[:, text_seq_length:]
+
+        if False:
+            hidden_states = rearrange(hidden_states, "b (t s) c -> b t s c", t=num_frames) 
+            continuous_actions = repeat(continuous_actions, 'b t c -> b t s c', s=hidden_states.shape[2])
+            hidden_states[:, 1:, :, :] = hidden_states[:, 1:, :, :] + continuous_actions
+            hidden_states = rearrange(hidden_states, "b t s c -> b (t s) c")
+        
+        routing_layer_weights = {}
+
+        # 3. Transformer blocks
+        for i, block in enumerate(self.transformer_blocks):
+            if torch.is_grad_enabled() and self.gradient_checkpointing:
+
+
+                def create_custom_forward(module):
+                    def custom_forward(*inputs):
+                        return module(*inputs)
+
+                    return custom_forward
+
+                ckpt_kwargs: Dict[str, Any] = (
+                    {"use_reentrant": False} if is_torch_version(">=", "1.11.0") else {}
+                )
+                block_outputs = torch.utils.checkpoint.checkpoint(
+                    create_custom_forward(block),
+                    hidden_states,
+                    encoder_hidden_states,
+                    emb,
+                    image_rotary_emb,
+                    **ckpt_kwargs,
+                )
+            else:
+                block_outputs = block(
+                    hidden_states=hidden_states,
+                    encoder_hidden_states=encoder_hidden_states,
+                    temb=emb,
+                    image_rotary_emb=image_rotary_emb,
+                )
+            
+            if block_outputs[2] is not None:
+                hidden_states, encoder_hidden_states, routing_weights = block_outputs
+                routing_layer_weights[f"block_{i}"] = routing_weights
+            else:
+                hidden_states, encoder_hidden_states, _ = block_outputs
+
+        if not self.config.use_rotary_positional_embeddings:
+            # CogVideoX-2B
+            hidden_states = self.norm_final(hidden_states)
+        else:
+            # CogVideoX-5B
+            hidden_states = torch.cat([encoder_hidden_states, hidden_states], dim=1)
+            hidden_states = self.norm_final(hidden_states)
+            hidden_states = hidden_states[:, text_seq_length:]
+        # 4. Final block
+        hidden_states = self.norm_out(hidden_states, temb=emb)
+        hidden_states = self.proj_out(hidden_states)
+        # 5. Unpatchify
+        p = self.config.patch_size
+        p_t = self.config.patch_size_t
+        if p_t is None:
+            output = hidden_states.reshape(
+                batch_size, num_frames, height // p, width // p, -1, p, p
+            )
+            output = output.permute(0, 1, 4, 2, 5, 3, 6).flatten(5, 6).flatten(3, 4)
+        else:
+            output = hidden_states.reshape(
+                batch_size, (num_frames + p_t - 1) // p_t, height // p, width // p, -1, p_t, p, p
+            )
+            output = (
+                output.permute(0, 1, 5, 4, 2, 6, 3, 7).flatten(6, 7).flatten(4, 5).flatten(1, 2)
+            )
+
+        if USE_PEFT_BACKEND:
+            # remove `lora_scale` from each PEFT layer
+            unscale_lora_layers(self, lora_scale)
+        
+        if not return_dict:
+            if len(routing_layer_weights) > 0:
+                return output, routing_layer_weights
+
+            return (output,)
+        return Transformer2DModelOutput(sample=output)
+
 
     def _set_gradient_checkpointing(self, module, value=False):
         self.gradient_checkpointing = value
@@ -551,156 +498,6 @@ class CogVideoXTransformer3DActionModel(ModelMixin, ConfigMixin, PeftAdapterMixi
         if self.original_attn_processors is not None:
             self.set_attn_processor(self.original_attn_processors)
 
-    def encode_actions(self, actions: Dict[str, Any], uc=False, device=None, dtype=None, cfg=False, mask_ratio=0.0, sequence_length=226):
-        B, T = actions["dx"].shape
-        actions = {k: v.to(device, dtype=dtype) for k, v in actions.items()}
-        if cfg:
-            encoded_uc_actions = self.action_encoder(actions, uc=True, sequence_length=sequence_length)
-            encoded_actions = self.action_encoder(actions, uc=False, sequence_length=sequence_length)
-            encoded_actions = torch.cat([encoded_actions, encoded_uc_actions], dim=0)
-            return encoded_actions
-
-        if uc:
-            encoded_actions = self.action_encoder(actions, uc=True,  sequence_length=sequence_length)
-        else:
-            encoded_actions = self.action_encoder(actions, uc=False, mask_ratio=mask_ratio,  sequence_length=sequence_length)
-
-        return encoded_actions
-
-    def forward(
-        self,
-        hidden_states: torch.Tensor,
-        encoder_hidden_states: torch.Tensor,
-        timestep: Union[int, float, torch.LongTensor],
-        timestep_cond: Optional[torch.Tensor] = None,
-        ofs: Optional[Union[int, float, torch.LongTensor]] = None,
-        image_rotary_emb: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
-        attention_kwargs: Optional[Dict[str, Any]] = None,
-        return_dict: bool = True,
-        actions: Optional[torch.Tensor] = None,
-        cfg: Optional[Dict[str, Any]] = False,
-        uc: bool = False,
-        mask_ratio: float = 0.0,
-    ):
-        if attention_kwargs is not None:
-            attention_kwargs = attention_kwargs.copy()
-            lora_scale = attention_kwargs.pop("scale", 1.0)
-        else:
-            lora_scale = 1.0
-        if USE_PEFT_BACKEND:
-            # weight the lora layers by setting `lora_scale` for each PEFT layer
-            scale_lora_layers(self, lora_scale)
-        else:
-            if attention_kwargs is not None and attention_kwargs.get("scale", None) is not None:
-                logger.warning(
-                    "Passing `scale` via `attention_kwargs` when not using the PEFT backend is ineffective."
-                )
-        batch_size, num_frames, channels, height, width = hidden_states.shape
-        # 1. Time embedding
-        timesteps = timestep
-        t_emb = self.time_proj(timesteps)
-        # timesteps does not contain any weights and will always return f32 tensors
-        # but time_embedding might actually be running in fp16. so we need to cast here.
-        # there might be better ways to encapsulate this.
-        t_emb = t_emb.to(dtype=hidden_states.dtype)
-        emb = self.time_embedding(t_emb, timestep_cond)
-        if self.ofs_embedding is not None:
-            ofs_emb = self.ofs_proj(ofs)
-            ofs_emb = ofs_emb.to(dtype=hidden_states.dtype)
-            ofs_emb = self.ofs_embedding(ofs_emb)
-            emb = emb + ofs_emb
-
-        encoded_actions = self.encode_actions(
-           actions, uc=uc, device=hidden_states.device, dtype=hidden_states.dtype, cfg=cfg, mask_ratio=mask_ratio
-        )
-
-        if False:
-            encoded_actions, continuous_actions  = self.encode_actions(
-                actions, uc=uc, device=hidden_states.device, dtype=hidden_states.dtype, cfg=cfg, mask_ratio=mask_ratio
-            )
-
-        if encoder_hidden_states is not None:
-            encoder_hidden_states = torch.cat([encoder_hidden_states, encoded_actions], dim=1)
-            assert encoder_hidden_states.shape[1] == self.max_text_seq_length
-        else:
-            encoder_hidden_states = encoded_actions
-
-        # 2. Patch embedding
-        hidden_states = self.patch_embed(encoder_hidden_states, hidden_states)
-        hidden_states = self.embedding_dropout(hidden_states)
-
-        text_seq_length = encoder_hidden_states.shape[1]
-        encoder_hidden_states = hidden_states[:, :text_seq_length]
-        hidden_states = hidden_states[:, text_seq_length:]
-
-        if False:
-            hidden_states = rearrange(hidden_states, "b (t s) c -> b t s c", t=num_frames) 
-            continuous_actions = repeat(continuous_actions, 'b t c -> b t s c', s=hidden_states.shape[2])
-            hidden_states[:, 1:, :, :] = hidden_states[:, 1:, :, :] + continuous_actions
-            hidden_states = rearrange(hidden_states, "b t s c -> b (t s) c")
-
-        # 3. Transformer blocks
-        for i, block in enumerate(self.transformer_blocks):
-            if torch.is_grad_enabled() and self.gradient_checkpointing:
-
-                def create_custom_forward(module):
-                    def custom_forward(*inputs):
-                        return module(*inputs)
-
-                    return custom_forward
-
-                ckpt_kwargs: Dict[str, Any] = (
-                    {"use_reentrant": False} if is_torch_version(">=", "1.11.0") else {}
-                )
-                hidden_states, encoder_hidden_states = torch.utils.checkpoint.checkpoint(
-                    create_custom_forward(block),
-                    hidden_states,
-                    encoder_hidden_states,
-                    emb,
-                    image_rotary_emb,
-                    **ckpt_kwargs,
-                )
-            else:
-                hidden_states, encoder_hidden_states = block(
-                    hidden_states=hidden_states,
-                    encoder_hidden_states=encoder_hidden_states,
-                    temb=emb,
-                    image_rotary_emb=image_rotary_emb,
-                )
-        if not self.config.use_rotary_positional_embeddings:
-            # CogVideoX-2B
-            hidden_states = self.norm_final(hidden_states)
-        else:
-            # CogVideoX-5B
-            hidden_states = torch.cat([encoder_hidden_states, hidden_states], dim=1)
-            hidden_states = self.norm_final(hidden_states)
-            hidden_states = hidden_states[:, text_seq_length:]
-        # 4. Final block
-        hidden_states = self.norm_out(hidden_states, temb=emb)
-        hidden_states = self.proj_out(hidden_states)
-        # 5. Unpatchify
-        p = self.config.patch_size
-        p_t = self.config.patch_size_t
-        if p_t is None:
-            output = hidden_states.reshape(
-                batch_size, num_frames, height // p, width // p, -1, p, p
-            )
-            output = output.permute(0, 1, 4, 2, 5, 3, 6).flatten(5, 6).flatten(3, 4)
-        else:
-            output = hidden_states.reshape(
-                batch_size, (num_frames + p_t - 1) // p_t, height // p, width // p, -1, p_t, p, p
-            )
-            output = (
-                output.permute(0, 1, 5, 4, 2, 6, 3, 7).flatten(6, 7).flatten(4, 5).flatten(1, 2)
-            )
-        if USE_PEFT_BACKEND:
-            # remove `lora_scale` from each PEFT layer
-            unscale_lora_layers(self, lora_scale)
-        if not return_dict:
-            return (output,)
-        return Transformer2DModelOutput(sample=output)
-
-
 config_5b = {
     "activation_fn": "gelu-approximate",
     "attention_bias": True,
@@ -732,6 +529,8 @@ config_5b = {
     "use_learned_positional_embeddings": False,
     "use_rotary_positional_embeddings": True,
 }
+
+
 config_2b_iv = {
     "activation_fn": "gelu-approximate",
     "attention_bias": True,
@@ -786,11 +585,120 @@ config_2b = {
     "use_rotary_positional_embeddings": False,
 }
 
+config_100m = {
+    "activation_fn": "gelu-approximate",
+    "attention_bias": True,
+    "attention_head_dim": 64,
+    "num_attention_heads": 8, #12
+    "num_layers": 12,         
+    "dropout": 0.0,
+    "flip_sin_to_cos": True,
+    "freq_shift": 0,
+    "use_rotary_positional_embeddings": False,
+    "in_channels": 32,
+    "out_channels": 16,
+    "patch_size": 2,
+    "max_text_seq_length": 226,
+    "text_embed_dim": 768,     
+    "time_embed_dim": 256,     
+    "norm_elementwise_affine": True,
+    "norm_eps": 1e-5,
+    "sample_frames": 49,
+    "sample_height": 60,
+    "sample_width": 90,
+    "spatial_interpolation_scale": 1.875,
+    "temporal_compression_ratio": 4,
+    "temporal_interpolation_scale": 1.0,
+    "timestep_activation_fn": "silu"
+}
+
+config_50m = {
+    "activation_fn": "gelu-approximate",
+    "attention_bias": True,
+    "attention_head_dim": 64,
+    "num_attention_heads": 8,
+    "num_layers": 12,         
+    "dropout": 0.0,
+    "flip_sin_to_cos": True,
+    "freq_shift": 0,
+    "use_rotary_positional_embeddings": False,
+    "in_channels": 32,
+    "out_channels": 16,
+    "patch_size": 2,
+    "max_text_seq_length": 226,
+    "text_embed_dim": 768,     
+    "time_embed_dim": 256,     
+    "norm_elementwise_affine": True,
+    "norm_eps": 1e-5,
+    "sample_frames": 49,
+    "sample_height": 60,
+    "sample_width": 90,
+    "spatial_interpolation_scale": 1.875,
+    "temporal_compression_ratio": 4,
+    "temporal_interpolation_scale": 1.0,
+    "timestep_activation_fn": "silu"
+}
+
 
 if __name__ == "__main__":
-    model = CogVideoXTransformer3DModel()
-    print(model)
-    test_input = torch.randn(1, 49, 16, 60, 90)
-    test_encoder_hidden_states = torch.randn(1, 226, 16, 60, 90)
-    test_timestep = 0
-    output = model(test_input, test_encoder_hidden_states, test_timestep)
+    def print_trainable_parameters(model: nn.Module) -> None:
+        """
+        Prints out the names, shapes, and parameter counts for all parameters in `model` that are trainable.
+        Also prints a summary of the total number of trainable parameters vs. total parameters.
+        
+        Args:
+            model (nn.Module): The model whose parameters will be printed.
+        """
+        total_params = sum(p.numel() for p in model.parameters())
+        trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        
+        print(f"Trainable parameters: {trainable_params:,} / {total_params:,} "
+            f"({100 * trainable_params / total_params:.2f}%)\n")
+        
+        print("Trainable parameter details:")
+        for name, param in model.named_parameters():
+            if param.requires_grad:
+                # Convert the shape tuple to a string so that it can be formatted with a width specifier.
+                shape_str = str(tuple(param.shape))
+                print(f" - {name:40s} | Shape: {shape_str:20s} | Count: {param.numel():,}")
+
+            
+            
+
+
+
+    from custom_moe2 import MixLoraConfig, MoeLoraLayer, inject_adapter_in_model, mem_config, save_adapter_weights, load_adapter_weights , set_adapter_trainable, fix_routing_weights, disable_adapter, activate_adapter
+    with torch.no_grad(), torch.cuda.amp.autocast():
+        model = CogVideoXTransformer3DActionModel(**config_2b_iv).cuda().to(dtype=torch.bfloat16)
+        #inject_adapter_in_model(model, mem_config, weights=None, device="cuda", dtype=torch.bfloat16)
+        #save_adapter_weights(model, save_directory="mix_lora_weights")
+        load_adapter_weights(model=model, load_directory="mix_lora_weights", device="cuda")
+        disable_adapter(model)
+
+        model.cuda()
+
+        #fix_routing_weights(model=model, routing_weights=torch.zeros((4), device="cuda"))
+        #print_trainable_parameters(model) 
+        #set_adapter_trainable(model=model)
+        #print_trainable_parameters(model) 
+
+        #print(model)
+        print(model)
+        actions = model.action_encoder.get_dummy_input(batch_size=1, num_frames=48)
+        actions = {k: v.cuda() for k, v in actions.items()}
+        test_input = torch.randn(1, 49, 32, 20, 30).cuda()
+        test_encoder_hidden_states =  None # torch.randn(1, 226, 16, 60, 90).cuda()
+        test_timestep = torch.tensor([0]).cuda()
+        output = model(test_input, test_encoder_hidden_states, test_timestep, actions=actions, return_dict=False)
+        print(output.sample.shape)
+#    with torch.no_grad(), torch.cuda.amp.autocast():
+#        model = CogVideoXTransformer3DActionModel(**config_2b_iv).cuda().to(dtype=torch.bfloat16)
+#        print(model)
+#        actions = model.action_encoder.get_dummy_input(batch_size=1, num_frames=48)
+#        actions = {k: v.cuda() for k, v in actions.items()}
+#        test_input = torch.randn(1, 49, 32, 20, 30).cuda()
+#        test_encoder_hidden_states =  None # torch.randn(1, 226, 16, 60, 90).cuda()
+#        test_timestep = torch.tensor([0]).cuda()
+#        output = model(test_input, test_encoder_hidden_states, test_timestep, actions=actions)
+#        print(output.sample.shape)
+#

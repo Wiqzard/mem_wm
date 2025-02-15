@@ -12,14 +12,14 @@ class Args(BaseModel):
     model_path: Path
     model_name: str
     model_type: Literal["i2v", "t2v", "wm"]
-    training_type: Literal["lora", "sft"] = "lora"
+    training_type: Literal["lora", "sft", "custom"] = "lora"
     encoder_path: Path | None = None
     local_path: Path | None = None
 
     ########## Output ##########
     output_dir: Path = Path("train_results/{:%Y-%m-%d-%H-%M-%S}".format(datetime.datetime.now()))
     report_to: Literal["tensorboard", "wandb", "all"] | None = None
-    tracker_name: str = "gem_inf"
+    tracker_name: str = "debug"
 
     ########## Data ###########
     data_root: Path

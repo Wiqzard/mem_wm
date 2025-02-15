@@ -20,7 +20,7 @@ from finetune.utils import unwrap_model
 from ..utils import register
 
 from finetune.models.action_encoder import ActionEncoder
-from finetune.models.transformer import CogVideoXTransformer3DActionModel, config_5b
+from finetune.models.transformer import CogVideoXTransformer3DActionModel
 from finetune.models.pipeline import CogVideoXImageToVideoPipeline
 
 

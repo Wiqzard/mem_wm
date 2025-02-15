@@ -9,10 +9,24 @@
 # to a specified directory.
 #
 
+# python download_dataset.py --json-file /home/ss24m050/Documents/CogVideo/data/jsons/build-house-Jul-28.json --output-dir /data/cvg/sebastian/minecraft_basalt/14
+# python download_dataset.py --json-file /home/ss24m050/Documents/CogVideo/data/jsons/pen-animals-Jul-28.json --output-dir /data/cvg/sebastian/minecraft_basalt/13
+# python download_dataset.py --json-file /home/ss24m050/Documents/CogVideo/data/jsons/find-cave-Jul-28.json --output-dir /data/cvg/sebastian/minecraft_basalt/12
+
+# python download_dataset.py --json-file /home/ss24m050/Documents/CogVideo/data/jsons/all_8xx_Jun_29.json --output-dir /data/cvg/sebastian/minecraft_basalt/8
+# python download_dataset.py --json-file /home/ss24m050/Documents/CogVideo/data/jsons/all_9xx_Jun_29.json --output-dir /data/cvg/sebastian/minecraft_basalt/9
+# python download_dataset.py --json-file /home/ss24m050/Documents/CogVideo/data/jsons/waterfall-Jul-28.json --output-dir /data/cvg/sebastian/minecraft_basalt/11
+# python download_dataset.py --json-file /home/ss24m050/Documents/CogVideo/data/jsons/all_10xx_Jun_29.json --output-dir /data/cvg/sebastian/minecraft_basalt/10
+# TODO:
+# 
+
+
+
 import argparse
 import urllib.request
 import os
 import glob, os, cv2, json
+from tqdm import tqdm
 
 parser = argparse.ArgumentParser(description="Download OpenAI contractor datasets")
 parser.add_argument("--json-file", type=str, required=True, help="Path to the index .json file")
@@ -26,14 +40,14 @@ def relpaths_to_download(relpaths, output_dir):
 
     data_path = '/'.join(relpaths[0].split('/')[:-1])
     non_defect=[]
-    for vid_name in glob.glob(os.path.join(output_dir,'*.mp4')):
-        try:
-            vid = cv2.VideoCapture(vid_name)
-            read_json(vid_name.replace('mp4', 'jsonl'))
-            if vid.isOpened():
-                non_defect.append(os.path.join(data_path, vid_name.split('/')[-1]))
-        except:
-            continue
+    for vid_name in tqdm(glob.glob(os.path.join(output_dir,'*.mp4'))):
+        #try:
+        #    vid = cv2.VideoCapture(vid_name)
+        #    read_json(vid_name.replace('mp4', 'jsonl'))
+        #    if vid.isOpened():
+        non_defect.append(os.path.join(data_path, vid_name.split('/')[-1]))
+        #except:
+        #    continue
 
     relpaths = set(relpaths)
     non_defect = set(non_defect)

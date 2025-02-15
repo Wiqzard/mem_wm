@@ -588,35 +588,13 @@ class CogVideoXImageToVideoPipeline(DiffusionPipeline, CogVideoXLoraLoaderMixin)
         self._attention_kwargs = attention_kwargs
         self._interrupt = False
 
-        # 2. Default call parameters
         batch_size = batch_size
-        #if prompt is not None and isinstance(prompt, str):
-        #    batch_size = 1
-        #elif prompt is not None and isinstance(prompt, list):
-        #    batch_size = len(prompt)
-        #else:
-        #    batch_size = prompt_embeds.shape[0]
-
         device = self._execution_device
 
         # here `guidance_scale` is defined analog to the guidance weight `w` of equation (2)
         # of the Imagen paper: https://arxiv.org/pdf/2205.11487.pdf . `guidance_scale = 1`
         # corresponds to doing no classifier free guidance.
         do_classifier_free_guidance = guidance_scale > 1.0
-
-        # 3. Encode input prompt
-        #prompt_embeds, negative_prompt_embeds = self.encode_prompt(
-        #    prompt=prompt,
-        #    negative_prompt=negative_prompt,
-        #    do_classifier_free_guidance=do_classifier_free_guidance,
-        #    num_videos_per_prompt=num_videos_per_prompt,
-        #    prompt_embeds=prompt_embeds,
-        #    negative_prompt_embeds=negative_prompt_embeds,
-        #    max_sequence_length=max_sequence_length,
-        #    device=device,
-        #)
-        #if do_classifier_free_guidance:
-        #    prompt_embeds = torch.cat([negative_prompt_embeds, prompt_embeds], dim=0)
 
         # 4. Prepare timesteps
         timesteps, num_inference_steps = retrieve_timesteps(self.scheduler, num_inference_steps, device, timesteps)
@@ -661,19 +639,8 @@ class CogVideoXImageToVideoPipeline(DiffusionPipeline, CogVideoXLoraLoaderMixin)
             if self.transformer.config.use_rotary_positional_embeddings
             else None
         )
-
-        # 8. Create ofs embeds if required
         ofs_emb = None if self.transformer.config.ofs_embed_dim is None else latents.new_full((1,), fill_value=2.0)
-
-        # 8. Denoising loop
         num_warmup_steps = max(len(timesteps) - num_inference_steps * self.scheduler.order, 0)
-
-        #if do_classifier_free_guidance:
-        #    num_actions = actions["dx"].shape[1]
-        #    dummy_actions = self.transformer.action_encoder.get_dummy_input(num_frames=num_actions, batch_size=batch_size)
-        #    actions = {k: torch.cat([actions[k], dummy_actions[k]], dim=0) for k in actions}
-
-
         with self.progress_bar(total=num_inference_steps) as progress_bar:
             # for DPM-solver++
             old_pred_original_sample = None
@@ -751,10 +718,13 @@ class CogVideoXImageToVideoPipeline(DiffusionPipeline, CogVideoXLoraLoaderMixin)
         else:
             video = latents
 
+        #else:
+            #video = latents
+
         # Offload all models
         self.maybe_free_model_hooks()
 
-        if not return_dict:
-            return (video,)
+        if return_dict:
+            return (latents, video)
 
         return CogVideoXPipelineOutput(frames=video)

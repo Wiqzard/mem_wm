@@ -20,6 +20,8 @@ from .utils import (
     preprocess_image_with_resize,
     preprocess_video_with_buckets,
     preprocess_video_with_resize,
+    preprocess_video_with_resize_wm,
+    #preprocess_image_with_resize_wm
 )
 
 
@@ -76,7 +78,7 @@ class BaseI2VDataset(Dataset):
 
         self.device = device
         self.encode_video = trainer.encode_video
-        self.encode_text = trainer.encode_text
+        #self.encode_text = trainer.encode_text
         self.encode_online = encode_online 
 
         # Check if number of prompts matches number of videos and images
@@ -149,7 +151,8 @@ class BaseI2VDataset(Dataset):
         #    save_file({"prompt_embedding": prompt_embedding}, prompt_embedding_path)
         #    logger.info(f"Saved prompt embedding to {prompt_embedding_path}", main_process_only=False)
         if self.encode_online:
-            frames, image = self.preprocess(video, image)
+            frames, image, index = self.preprocess(video, image)
+
             image = self.image_transform(image)
             # Current shape of frames: [F, C, H, W]
             frames = self.video_transform(frames)
@@ -160,6 +163,7 @@ class BaseI2VDataset(Dataset):
                 "image": image,
                 "video": frames,
                 "encoded_video": None,
+                "start_index": index,
                 "video_metadata": {
                     "num_frames": frames.shape[2] // 4, #// self.encoder vae ...
                     "height": frames.shape[3] // 8 ,#// self.encoder vae ...
@@ -295,8 +299,8 @@ class I2VDatasetWithResize(BaseI2VDataset):
         self, video_path: Path | None, image_path: Path | None
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         if video_path is not None:
-            video = preprocess_video_with_resize(
-                video_path, self.max_num_frames, self.height, self.width
+            video, start_index = preprocess_video_with_resize(
+                video_path, self.max_num_frames, self.height, self.width, random=True
             )
         else:
             video = None
@@ -304,7 +308,7 @@ class I2VDatasetWithResize(BaseI2VDataset):
             image = preprocess_image_with_resize(image_path, self.height, self.width)
         else:
             image = None
-        return video, image
+        return video, image, start_index
 
     @override
     def video_transform(self, frames: torch.Tensor) -> torch.Tensor:
@@ -351,26 +355,49 @@ class I2VDatasetWithActions(I2VDatasetWithResize):
     """
 
     def __getitem__(self, index: int) -> Dict[str, Any]:
-        # First, get the base dictionary from I2VDatasetWithResize
-        data = super().__getitem__(index)
-
-        # The above 'data' dictionary contains:
-        #   {
-        #       "image": image_tensor,
-        #       "prompt_embedding": prompt_embedding_tensor,
-        #       "encoded_video": encoded_video_tensor,
-        #       "video_metadata": {...}
-        #   }
-
-        # Now, load the action metadata:
-        video_path = self.videos[index]  # e.g., /path/to/videos/<name>.mp4
-        metadata_path = self._get_metadata_path(video_path)
-        actions_tensor_dict = self._load_actions_as_tensors(
-            metadata_path, self.max_num_frames - 1 #data["video_metadata"]["num_frames"] * 8
+        video = self.videos[index]
+        image = self.images[index]
+        train_resolution_str = "x".join(str(x) for x in self.trainer.args.train_resolution)
+        cache_dir = self.trainer.args.data_root / "cache"
+        video_latent_dir = (
+            cache_dir / "video_latent" / "cogvideox1.5-i2v-wm" / train_resolution_str
         )
+        video_latent_dir.mkdir(parents=True, exist_ok=True)
+        encoded_video_path = video_latent_dir / (video.stem + ".safetensors")
+        frames, image, start_index = self.preprocess(video, image)
+        image = self.image_transform(image)
+        frames = self.video_transform(frames)
+        frames = frames.unsqueeze(0)
+        frames = frames.permute(0, 2, 1, 3, 4).contiguous()
 
-        data["actions"] = actions_tensor_dict
-        return data
+        metadata_path = self._get_metadata_path(video)
+        actions_tensor_dict = self._load_actions_as_tensors(
+            metadata_path, self.max_num_frames - 1, start_index #data["video_metadata"]["num_frames"] * 8
+        )
+        return {
+            "image": image,
+            "video": frames,
+            "encoded_video": None,
+            "actions": actions_tensor_dict,
+            "start_index": index,
+            "video_metadata": {
+                "num_frames": frames.shape[2] // 4, #// self.encoder vae ...
+                "height": frames.shape[3] // 8 ,#// self.encoder vae ...
+                "width": frames.shape[4] // 8 , #// self.encoder vae ...
+            },
+            
+        }
+
+    @override
+    def preprocess(
+        self, video_path: Path | None, image_path: Path | None
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        if video_path is not None:
+            video, first_frame, start_index = preprocess_video_with_resize_wm(
+                video_path, self.max_num_frames, self.height, self.width, random_start=True
+            )
+        return video, first_frame, start_index 
+
 
     def _get_metadata_path(self, video_path: Path) -> Path:
         """
@@ -394,10 +421,10 @@ class I2VDatasetWithActions(I2VDatasetWithResize):
         # Or a simpler string-based approach if you rely on a fixed structure:
         # (Be sure to handle the case if the video_path does not follow the pattern.)
         # This is just an example—adapt it to your dataset layout:
-        return Path(str(video_path).replace("/videos/", "/metadata/").replace(".mp4", ".json"))
+        return Path(str(video_path).replace("videos", "metadata").replace(".mp4", ".json"))
 
     def _load_actions_as_tensors(
-        self, metadata_path: Path, num_actions: int = 10000
+        self, metadata_path: Path, num_actions: int = 10000, start_index=0
     ) -> Dict[str, torch.Tensor]:
         """
         Loads the JSON metadata from `metadata_path` and converts it into Tensors
@@ -440,6 +467,8 @@ class I2VDatasetWithActions(I2VDatasetWithResize):
         wasd_map = {"w": 0, "a": 1, "s": 2, "d": 3}
 
         for t, action in enumerate(actions):
+            if t < start_index:
+                continue
             if t >= num_actions:
                 break
             # dx, dy
@@ -479,6 +508,7 @@ class I2VDatasetWithActions(I2VDatasetWithResize):
         #print(shift.shape)
         #print(mouse_1.shape)
         #print(dx.shape)
+        assert wasd.shape == (num_actions, 4)
         return actions_tensor_dict
 
 

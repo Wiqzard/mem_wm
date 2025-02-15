@@ -7,6 +7,8 @@ import math
 from datetime import timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
+import numpy as np
+
 
 import diffusers
 import torch
@@ -31,7 +33,7 @@ from tqdm import tqdm
 
 from finetune.constants import LOG_LEVEL, LOG_NAME
 from finetune.datasets import I2VDatasetWithResize, T2VDatasetWithResize
-from finetune.datasets import I2VDatasetWithActions
+from finetune.datasets import I2VDatasetWithActions, WMDataset
 from finetune.datasets.utils import (
     load_images,
     load_prompts,
@@ -54,6 +56,18 @@ from finetune.utils import (
     unload_model,
     unwrap_model,
 )
+import torch.distributed as dist
+
+
+def worker_init_fn(worker_id):
+    # Ensure each worker gets a different seed
+    rank = dist.get_rank() if dist.is_initialized() else 0
+    seed = torch.initial_seed() % 2**32
+    seed = seed + rank  # Offset seed by process rank
+    #seed = torch.initial_seed() % 2**32  # Get base seed
+    np.random.seed(seed + worker_id)
+    random.seed(seed + worker_id)
+
 
 
 logger = get_logger(LOG_NAME, LOG_LEVEL)
@@ -87,7 +101,9 @@ class Trainer:
         self.optimizer = None
         self.lr_scheduler = None
 
+        print("init dist")
         self._init_distributed()
+        print("init dist done!")
         self._init_logging()
         self._init_directories()
 
@@ -119,8 +135,9 @@ class Trainer:
 
         self.accelerator = accelerator
 
-        if self.args.seed is not None:
-            set_seed(self.args.seed)
+        #if self.args.seed is not None:
+        set_seed(self.args.seed + accelerator.process_index)
+        #    set_seed(self.args.seed)
 
     def _init_logging(self) -> None:
         logging.basicConfig(
@@ -187,15 +204,27 @@ class Trainer:
                 trainer=self,
             )
         elif self.args.model_type == "wm":
-            self.dataset = I2VDatasetWithActions(
-                **(self.args.model_dump()),
-                device=self.accelerator.device,
+
+            self.dataset = WMDataset(
+                #**(self.args.model_dump()),
+                #device=self.accelerator.device,
+                data_root=self.args.data_root,
+                video_column=self.args.video_column,
+                image_column=self.args.image_column,
                 max_num_frames=self.state.train_frames,
-                # - 1,  # we give action a_{n-1} and generate frame s_n, no need for a_n
                 height=self.state.train_height,
                 width=self.state.train_width,
-                trainer=self,
+                #trainer=self,
             )
+            #self.dataset = I2VDatasetWithActions(
+            #    **(self.args.model_dump()),
+            #    device=self.accelerator.device,
+            #    max_num_frames=self.state.train_frames,
+            #    # - 1,  # we give action a_{n-1} and generate frame s_n, no need for a_n
+            #    height=self.state.train_height,
+            #    width=self.state.train_width,
+            #    trainer=self,
+            #)
         else:
             raise ValueError(f"Invalid model type: {self.args.model_type}")
 
@@ -239,6 +268,7 @@ class Trainer:
             num_workers=self.args.num_workers,
             pin_memory=self.args.pin_memory,
             shuffle=True,
+            worker_init_fn=worker_init_fn
         )
 
     def prepare_trainable_parameters(self):
@@ -666,7 +696,7 @@ class Trainer:
 
                 extension = "png" if artifact_type == "image" else "mp4"
                 filename = (
-                    f"validation-{step}-{accelerator.process_index}-{prompt_filename}-{hash_suffix}.{extension}"
+                    f"validation-{step}-{accelerator.process_index}-{key}-{hash_suffix}.{extension}"
                 )
                 validation_path = self.args.output_dir / "validation_res"
                 validation_path.mkdir(parents=True, exist_ok=True)

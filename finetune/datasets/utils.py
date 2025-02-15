@@ -17,39 +17,43 @@ decord.bridge.set_bridge("torch")
 
 ##########  loaders  ##########
 
+
 def format_action_string(action_dict):
-    num_frames = action_dict['wasd'].shape[1]
+    num_frames = action_dict["w"].shape[1]
     action_names = list(action_dict.keys())
-    
+
     formatted_lines = []
     for frame_idx in range(num_frames):
         active_actions = []
-        
+
         # Process key actions
-        if 'wasd' in action_dict:
-            wasd_keys = ['w', 'a', 's', 'd']
-            active_keys = [wasd_keys[i] for i in range(4) if action_dict['wasd'][0, frame_idx, i] > 0.5]
-            active_actions.extend(active_keys)
-        
+
+        wasd_keys = ["w", "a", "s", "d"]
+        for key in wasd_keys:
+            if key in action_dict:
+                if action_dict[key][0, frame_idx] > 0.5:
+                    active_actions.append(key)
+
         # Process other actions (space, shift, mouse buttons)
-        for key in ['space', 'shift', 'mouse_1', 'mouse_2']:
+        for key in ["space", "shift", "mouse_1", "mouse_2"]:
             if key in action_dict and action_dict[key][0, frame_idx] > 0.5:
-                active_actions.append(key.replace('_', ''))
-        
+                active_actions.append(key.replace("_", ""))
+
         # Process dx and dy
         dx, dy = 0, 0
-        if 'dx' in action_dict:
-            dx = action_dict['dx'][0, frame_idx].item()
-        if 'dy' in action_dict:
-            dy = action_dict['dy'][0, frame_idx].item()
-        
+        if "dx" in action_dict:
+            dx = action_dict["dx"][0, frame_idx].item()
+        if "dy" in action_dict:
+            dy = action_dict["dy"][0, frame_idx].item()
+
         if abs(dx) > 0 or abs(dy) > 0:
-            active_actions.append(f'dx:{dx:.1f} dy:{dy:.1f}')
-        
+            active_actions.append(f"dx:{dx:.1f} dy:{dy:.1f}")
+
         # Format the frame output
         formatted_lines.append(f'T {frame_idx + 1}: {", ".join(active_actions)} |')
-    
-    return ' | '.join(formatted_lines)
+
+    return " | ".join(formatted_lines)
+
 
 def load_prompts(prompt_path: Path) -> List[str]:
     with open(prompt_path, "r", encoding="utf-8") as file:
@@ -73,7 +77,11 @@ def load_images(image_path: Path) -> List[Path]:
 def load_actions(video_path: Path) -> List[str]:
     with open(video_path, "r", encoding="utf-8") as file:
         return [
-            Path(str(video_path.parent / line.strip()).replace("videos/", "metadata/").replace(".mp4", ".json"))
+            Path(
+                str(video_path.parent / line.strip())
+                .replace("videos", "metadata")
+                .replace(".mp4", ".json")
+            )
             for line in file.readlines()
             if len(line.strip()) > 0
         ]
@@ -142,11 +150,61 @@ def preprocess_image_with_resize(
     return image
 
 
+def preprocess_video_with_resize_wm(
+    video_path: Path | str,
+    max_num_frames: int,
+    height: int,
+    width: int,
+    random_start: bool = False,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """
+    Loads, resizes, and returns all frames of a video (up to max_num_frames)
+    plus the first frame used (which corresponds to the actual start index).
+
+    Returns:
+        frames: torch.Tensor of shape [F, C, H, W].
+        first_frame: torch.Tensor of shape [C, H, W] corresponding
+                     to frames[0].
+    """
+    if isinstance(video_path, str):
+        video_path = Path(video_path)
+
+    # Create a decord VideoReader with on-the-fly resizing
+    video_reader = decord.VideoReader(uri=video_path.as_posix(), width=width, height=height)
+    video_num_frames = len(video_reader)
+
+    # -- Fewer frames than max_num_frames: replicate last frame --
+    if video_num_frames < max_num_frames:
+        frames = video_reader.get_batch(list(range(video_num_frames)))  # shape: [num, H, W, C]
+        last_frame = frames[-1:]
+        repeats_needed = max_num_frames - video_num_frames
+        repeated_frames = last_frame.repeat(repeats_needed, 1, 1, 1)  # replicate last frame
+        frames = torch.cat([frames, repeated_frames], dim=0)  # [max_num_frames, H, W, C]
+
+        frames = frames.float().permute(0, 3, 1, 2).contiguous()  # [F, C, H, W]
+        first_frame = frames[0]  # [C, H, W]
+        return frames, first_frame, 0
+
+    # -- Otherwise, video has enough frames --
+    if random_start:
+        # Pick a random start so that we can still read max_num_frames
+        start_frame_idx = torch.randint(0, video_num_frames - max_num_frames + 1, (1,)).item()
+    else:
+        start_frame_idx = 0
+
+    indices = list(range(start_frame_idx, start_frame_idx + max_num_frames))
+    frames = video_reader.get_batch(indices)  # [max_num_frames, H, W, C]
+    frames = frames.float().permute(0, 3, 1, 2).contiguous()  # [F, C, H, W]
+    first_frame = frames[0]  # [C, H, W]
+    return frames, first_frame, start_frame_idx
+
+
 def preprocess_video_with_resize(
     video_path: Path | str,
     max_num_frames: int,
     height: int,
     width: int,
+    random_start: bool = False,
 ) -> torch.Tensor:
     """
     Loads and resizes a single video.
@@ -182,14 +240,25 @@ def preprocess_video_with_resize(
         frames = torch.cat([frames, repeated_frames], dim=0)
         return frames.float().permute(0, 3, 1, 2).contiguous()
     else:
-        indices = list(range(0, video_num_frames, video_num_frames // max_num_frames))
-        frames = video_reader.get_batch(indices)
-        frames = frames[:max_num_frames].float()
-        frames = frames.permute(0, 3, 1, 2).contiguous()
-        return frames
+        if random_start:
+            start_frame = torch.randint(0, video_num_frames - max_num_frames + 1, (1,)).item()
+            indices = list(range(start_frame, start_frame + max_num_frames))
+            frames = video_reader.get_batch(indices)
+            frames = frames[:max_num_frames].float()
+            frames = frames.permute(0, 3, 1, 2).contiguous()
+            return frames, indices
+        else:
+            indices = list(range(0, video_num_frames, video_num_frames // max_num_frames))
+
+            frames = video_reader.get_batch(indices)
+            frames = frames[:max_num_frames].float()
+            frames = frames.permute(0, 3, 1, 2).contiguous()
+            return frames
 
 
-def load_actions_as_tensors(metadata_path: Path, num_actions: int) -> Dict[str, torch.Tensor]:
+def load_actions_as_tensors(
+    metadata_path: Path, num_actions: int, start_index: int = 0, action_list: List = None
+) -> Dict[str, torch.Tensor]:
     """
     Loads the JSON metadata from `metadata_path` and converts it into Tensors
     with shapes:
@@ -202,67 +271,97 @@ def load_actions_as_tensors(metadata_path: Path, num_actions: int) -> Dict[str, 
         dx:      (1, T)
         dy:      (1, T)
 
-    Returns them as a dict under the key "actions".
+    Returns them in a dict under the key "actions".
     """
-    if not metadata_path.exists():
-        # If metadata is missing, handle gracefully or raise error
-        raise FileNotFoundError(f"Metadata file not found at {metadata_path}")
+    if metadata_path is not None:
+        if not metadata_path.exists():
+            # If metadata is missing, handle gracefully or raise error
+            raise FileNotFoundError(f"Metadata file not found at {metadata_path}")
 
-    with open(metadata_path, "r") as f:
-        metadata = json.load(f)
+        with open(metadata_path, "r") as f:
+            metadata = json.load(f)
+        actions = metadata["actions"]  # list of dicts with "dx", "dy", "buttons", "keys"
 
-    actions = metadata["actions"]  # list of dicts with "dx", "dy", "buttons", "keys"
-    #num_actions = len(actions)
+    if action_list is not None:
+        actions = action_list
 
-    # Prepare empty torch arrays:
-    # (T,) or (T,4), but eventually we add a batch dim => (1,T,...) for the final return
-    wasd = torch.zeros(num_actions, 4, dtype=torch.float)
-    space = torch.zeros(num_actions, dtype=torch.float)
-    shift = torch.zeros(num_actions, dtype=torch.float)
-    mouse_1 = torch.zeros(num_actions, dtype=torch.float)
-    mouse_2 = torch.zeros(num_actions, dtype=torch.float)
-    dx = torch.zeros(num_actions, dtype=torch.float)
-    dy = torch.zeros(num_actions, dtype=torch.float)
+    actions = metadata["actions"]  # list of dicts
+    num_actions_in_sample = len(actions)
+    total_actions = min(num_actions_in_sample, num_actions)
+    if total_actions < num_actions:
+        logging.warning(
+            f"Total actions in sample ({num_actions_in_sample}) is less than requested ({num_actions})"
+        )
 
-    # We'll map 'w','a','s','d' to indices 0..3
-    wasd_map = {"w": 0, "a": 1, "s": 2, "d": 3}
+    w = torch.zeros(total_actions, dtype=torch.float)
+    a = torch.zeros(total_actions, dtype=torch.float)
+    s = torch.zeros(total_actions, dtype=torch.float)
+    d = torch.zeros(total_actions, dtype=torch.float)
+    e = torch.zeros(total_actions, dtype=torch.float)
+    esc = torch.zeros(total_actions, dtype=torch.float)
+    dwheel = torch.zeros(total_actions, dtype=torch.float)
+    space = torch.zeros(total_actions, dtype=torch.float)
+    shift = torch.zeros(total_actions, dtype=torch.float)
+    mouse_1 = torch.zeros(total_actions, dtype=torch.float)
+    mouse_2 = torch.zeros(total_actions, dtype=torch.float)
+    dx = torch.zeros(total_actions, dtype=torch.float)
+    dy = torch.zeros(total_actions, dtype=torch.float)
 
-    for t, action in enumerate(actions):
-        if t >= num_actions:
+    count = 0
+    # for t, action in enumerate(actions):
+    for t, action in zip(range(start_index, start_index + total_actions), actions[start_index:]):
+        # Skip until we reach start_index
+        if t < start_index:
+            continue
+        if count >= total_actions:
             break
-        # dx, dy
-        dx[t] = float(action.get("dx", 0.0))
-        dy[t] = float(action.get("dy", 0.0))
 
-        # keys: e.g. ["w", "shift", "space"]
-        keys = action.get("keys", [])
-        for k in keys:
-            if k in wasd_map:
-                wasd[t, wasd_map[k]] = 1.0
+        dx[count] = float(action.get("dx", 0.0))
+        dy[count] = float(action.get("dy", 0.0))
+
+        # Process keys
+        for k in action.get("keys", []):
+            if k == "w":
+                w[count] = 1.0
+            elif k == "a":
+                a[count] = 1.0
+            elif k == "s":
+                s[count] = 1.0
+            elif k == "d":
+                d[count] = 1.0
+            elif k == "e":
+                e[count] = 1.0
+            elif k == "esc":
+                esc[count] = 1.0
             elif k == "space":
-                space[t] = 1.0
+                space[count] = 1.0
             elif k == "shift":
-                shift[t] = 1.0
-            # If you have more keys you care about, add logic here
+                shift[count] = 1.0
 
-        # buttons: e.g. [0] or [0,1] or [1] or []
-        buttons = action.get("buttons", [])
-        if 0 in buttons:  # Typically mouse left
-            mouse_1[t] = 1.0
-        if 1 in buttons:  # Typically mouse right
-            mouse_2[t] = 1.0
+        # Process mouse buttons
+        for b in action.get("buttons", []):
+            if b == 0:
+                mouse_1[count] = 1.0
+            elif b == 1:
+                mouse_2[count] = 1.0
 
-    # Insert batch dimension of size 1 => (1, T, ...)
+        count += 1
+
     actions_tensor_dict = {
-        "wasd": wasd.unsqueeze(0),  # (1, T, 4)
-        "space": space.unsqueeze(0),  # (1, T)
-        "shift": shift.unsqueeze(0),  # (1, T)
-        "mouse_1": mouse_1.unsqueeze(0),  # (1, T)
-        "mouse_2": mouse_2.unsqueeze(0),  # (1, T)
-        "dx": dx.unsqueeze(0),  # (1, T)
-        "dy": dy.unsqueeze(0),  # (1, T)
+        "w": w.unsqueeze(0),
+        "a": a.unsqueeze(0),
+        "s": s.unsqueeze(0),
+        "d": d.unsqueeze(0),
+        "e": e.unsqueeze(0),
+        "esc": esc.unsqueeze(0),
+        "space": space.unsqueeze(0),
+        "dwheel": dwheel.unsqueeze(0),
+        "shift": shift.unsqueeze(0),
+        "mouse_1": mouse_1.unsqueeze(0),
+        "mouse_2": mouse_2.unsqueeze(0),
+        "dx": dx.unsqueeze(0),
+        "dy": dy.unsqueeze(0),
     }
-
     return actions_tensor_dict
 
 

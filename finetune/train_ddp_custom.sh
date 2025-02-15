@@ -11,10 +11,13 @@ MODEL_ARGS=(
     --model_name  "cogvideox-i2v-wm"
     #--model_type "i2v"
     --model_type "wm"
-    --training_type "lora"
-    #--training_type "sft"
+    #--training_type "lora"
+    --training_type "sft"
     #--local_path /home/ss24m050/Documents/CogVideo/outputs/transformer
-    --local_path /home/ss24m050/Documents/CogVideo/outputs/transformer_2b_iv
+    #--local_path /home/ss24m050/Documents/CogVideo/outputs/transformer_2b_iv
+    #--local_path "/home/ss24m050/Documents/CogVideo/outputs/transformer_2b_iv_grp_2"
+    #--local_path "/home/ss24m050/Documents/CogVideo/outputs/transformer_2b_iv_grp_2"
+    --local_path "/home/ss24m050/Documents/CogVideo/ckpts/cogvideo-2b"
     #--encoder_path 
 )
 
@@ -27,10 +30,12 @@ OUTPUT_ARGS=(
 
 # Data Configuration
 DATA_ARGS=(
-    --data_root "/home/ss24m050/Documents/CogVideo/data_test/post"
+    --data_root "/home/ss24m050/Documents/CogVideo/data/processed_gf_3/train_set" #"/home/ss24m050/Documents/CogVideo/data_test/post"
     --caption_column "prompts.txt"
-    --video_column "videos.txt"
+    --image_column "images_train_processed_gf.txt" #"images.txt"
+    --video_column "videos_train_processed_gf.txt" #"videos.txt"
     --train_resolution "49x352x640"  # (frames x height x width), frames should be 8N+1
+    --encode_online 1
     #--train_resolution "49x352x640"  # (frames x height x width), frames should be 8N+1
     #--train_resolution "49x36x640"  # (frames x height x width), frames should be 8N+1
     #--train_resolution "81x360x640"  # (frames x height x width), frames should be 8N+1
@@ -59,7 +64,7 @@ SYSTEM_ARGS=(
 
 # Checkpointing Configuration
 CHECKPOINT_ARGS=(
-    --checkpointing_steps 200 # save checkpoint every x steps
+    --checkpointing_steps 50 # save checkpoint every x steps
     --checkpointing_limit 2 # maximum number of checkpoints to keep, after which the oldest one is deleted
   #  --resume_from_checkpoint "/absolute/path/to/checkpoint_dir"  # if you want to resume from a checkpoint, otherwise, comment this line
 )
@@ -67,16 +72,17 @@ CHECKPOINT_ARGS=(
 # Validation Configuration
 VALIDATION_ARGS=(
     --do_validation true #true #false  # ["true", "false"]
-    --validation_dir "/home/ss24m050/Documents/CogVideo/data_test/post" #"/home/ss24m050/Documents/CogVideo/data/data_269"
-    --validation_steps 200  # should be multiple of checkpointing_steps
-    --validation_prompts "prompts.txt"
-    --validation_images "images.txt"
-    --validation_videos "videos.txt"
+    --validation_dir "/home/ss24m050/Documents/CogVideo/data/processed_gf_3/val_set" #"/home/ss24m050/Documents/CogVideo/data_test/post" #"/home/ss24m050/Documents/CogVideo/data/data_269"
+    --validation_steps 50  # should be multiple of checkpointing_steps
+    --validation_prompts "prompts_val_processed_gf.txt"
+    --validation_images "images_val_processed_gf.txt"
+    --validation_videos "videos_val_processed_gf.txt"
     --gen_fps 16
 )
 
 # Combine all arguments and launch training
-accelerate launch train.py \
+#accelerate launch train_online.py \
+accelerate launch --debug train.py \
     "${MODEL_ARGS[@]}" \
     "${OUTPUT_ARGS[@]}" \
     "${DATA_ARGS[@]}" \

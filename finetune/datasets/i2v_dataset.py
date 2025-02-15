@@ -351,7 +351,7 @@ class I2VDatasetWithActions(I2VDatasetWithResize):
         # Or a simpler string-based approach if you rely on a fixed structure:
         # (Be sure to handle the case if the video_path does not follow the pattern.)
         # This is just an example—adapt it to your dataset layout:
-        return Path(str(video_path).replace("/videos/", "/metadata/").replace(".mp4", ".json"))
+        return Path(str(video_path).replace("videos", "metadata").replace(".mp4", ".json"))
 
     def _load_actions_as_tensors(self, metadata_path: Path, num_actions: int=10000) -> Dict[str, torch.Tensor]:
         """

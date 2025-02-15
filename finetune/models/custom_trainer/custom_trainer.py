@@ -4,13 +4,9 @@ import torch
 from diffusers import (
     AutoencoderKLCogVideoX,
     CogVideoXDPMScheduler,
-    #CogVideoXImageToVideoPipeline,
-    CogVideoXTransformer3DModel,
 )
 from diffusers.models.embeddings import get_3d_rotary_pos_embed
 from PIL import Image
-from numpy import dtype
-from transformers import AutoTokenizer, T5EncoderModel
 from typing_extensions import override
 
 from finetune.schemas import Components
@@ -19,8 +15,7 @@ from finetune.utils import unwrap_model
 
 from ..utils import register
 
-from finetune.models.action_encoder import ActionEncoder
-from finetune.models.transformer import CogVideoXTransformer3DActionModel, config_5b
+from finetune.models.transformer import CogVideoXTransformer3DActionModel, config_50m
 from finetune.models.pipeline import CogVideoXImageToVideoPipeline
 
 
@@ -39,6 +34,7 @@ class CogVideoXI2VCustomTrainer(Trainer):
         #    model_path, subfolder="text_encoder"
         # )
 
+        #components.transformer = CogVideoXTransformer3DActionModel(**config_50m)
         components.transformer = CogVideoXTransformer3DActionModel.from_pretrained(
             self.args.local_path # if self.args.local_path is not None else model_path,
             #"/home/ss24m050/Documents/CogVideo/outputs/transformer_2b"
@@ -300,8 +296,9 @@ class CogVideoXI2VCustomTrainer(Trainer):
             generator=self.state.generator,
             guidance_scale=1,
             dtype=self.components.vae.dtype,
+            return_dict=True,
             
-        ).frames[0]
+        )[1][0]
         return [("video", video_generate)]
 
     def prepare_rotary_positional_embeddings(
