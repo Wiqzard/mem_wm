@@ -36,7 +36,9 @@ class CogVideoXI2VCustomTrainer(Trainer):
 
         #components.transformer = CogVideoXTransformer3DActionModel(**config_50m)
         components.transformer = CogVideoXTransformer3DActionModel.from_pretrained(
-            self.args.local_path # if self.args.local_path is not None else model_path,
+            self.args.local_path,
+            ignore_mismatched_sizes=True 
+             # if self.args.local_path is not None else model_path,
             #"/home/ss24m050/Documents/CogVideo/outputs/transformer_2b"
         )  # (**config_5b)
 
@@ -147,7 +149,6 @@ class CogVideoXI2VCustomTrainer(Trainer):
                 latent = encoded_videos.to(self.accelerator.device)
         else:
             latent = batch["encoded_videos"].to(self.accelerator.device)
-        
         images = batch["images"].to(self.accelerator.device)
         actions = batch["actions"]
 
@@ -214,6 +215,7 @@ class CogVideoXI2VCustomTrainer(Trainer):
         latent_padding = image_latents.new_zeros(padding_shape)
         image_latents = torch.cat([image_latents, latent_padding], dim=1)
 
+
         # Add noise to latent
         noise = torch.randn_like(latent)
         latent_noisy = self.components.scheduler.add_noise(latent, noise, timesteps)
@@ -244,15 +246,20 @@ class CogVideoXI2VCustomTrainer(Trainer):
             else latent.new_full((1,), fill_value=2.0)
         )
 
+
+        uc = bool(torch.rand(1) < 0.15)
+        encoded_actions = self.components.transformer.encode_actions(
+            actions, device=self.accelerator.device, dtype=latent_img_noisy.dtype, uc=uc
+        )
         predicted_noise = self.components.transformer(
             hidden_states=latent_img_noisy,
-            encoder_hidden_states=None,  # prompt_embedding,
+            encoder_hidden_states=encoded_actions,  # prompt_embedding,
             timestep=timesteps,
             ofs=ofs_emb,
             image_rotary_emb=rotary_emb,
             return_dict=False,
             actions=actions,
-            uc=False, #bool(torch.rand(1) < 0.2)
+            uc=uc, 
             mask_ratio=0.0, # 0.1
         )[0]
 
@@ -294,7 +301,7 @@ class CogVideoXI2VCustomTrainer(Trainer):
             image=image,
             actions=actions,
             generator=self.state.generator,
-            guidance_scale=1,
+            guidance_scale=6,
             dtype=self.components.vae.dtype,
             return_dict=True,
             

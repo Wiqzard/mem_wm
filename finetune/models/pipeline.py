@@ -641,6 +641,10 @@ class CogVideoXImageToVideoPipeline(DiffusionPipeline, CogVideoXLoraLoaderMixin)
         )
         ofs_emb = None if self.transformer.config.ofs_embed_dim is None else latents.new_full((1,), fill_value=2.0)
         num_warmup_steps = max(len(timesteps) - num_inference_steps * self.scheduler.order, 0)
+        
+
+        encoder_hidden_states = self.transformer.encode_actions(actions, cfg=do_classifier_free_guidance, device=device, dtype=dtype)
+
         with self.progress_bar(total=num_inference_steps) as progress_bar:
             # for DPM-solver++
             old_pred_original_sample = None
@@ -657,10 +661,11 @@ class CogVideoXImageToVideoPipeline(DiffusionPipeline, CogVideoXLoraLoaderMixin)
                 # broadcast to batch dimension in a way that's compatible with ONNX/Core ML
                 timestep = t.expand(latent_model_input.shape[0])
 
+
                 # predict noise model_output
                 noise_pred = self.transformer(
                     hidden_states=latent_model_input,
-                    encoder_hidden_states=None, #prompt_embeds,
+                    encoder_hidden_states=encoder_hidden_states, #None, #prompt_embeds,
                     timestep=timestep,
                     ofs=ofs_emb,
                     image_rotary_emb=image_rotary_emb,

@@ -6,8 +6,8 @@
 #SBATCH --partition=normal
 #SBATCH --ntasks=1
 #SBATCH --environment=mem_wm
-#SBATCH --container-workdir=/users/sstapf/test_data
-
+#SBATCH --container-workdir=/capstor/scratch/cscs/sstapf/mem_wm
+#SBATCH --account=a-a03
 
 
 #module load python  # Load the required Python module if needed
@@ -16,7 +16,7 @@
 
 #srun python download_dataset.py --output-dir="/capstor/store/cscs/swissai/a03/datasets/ego2d/10" --json-files "/users/sstapf/test_data/build-house-Jul-28.json"
 # -----------------
-srun python download_dataset.py --output-dir="/capstor/store/cscs/swissai/a03/datasets/ego2d/11" --json-file "/users/sstapf/test_data/find-cave-Jul-28.json"
+#srun python download_dataset.py --output-dir="/capstor/store/cscs/swissai/a03/datasets/ego2d/11" --json-file "/users/sstapf/test_data/find-cave-Jul-28.json"
 #srun python download_dataset.py --output-dir="/capstor/store/cscs/swissai/a03/datasets/ego2d/12" --json-file "/users/sstapf/test_data/waterfall-Jul-28.json"
 #srun python download_dataset.py --output-dir="/capstor/store/cscs/swissai/a03/datasets/ego2d/13" --json-file "/users/sstapf/test_data/pen-animals-Jul-28.json"
 #srun python download_dataset.py --output-dir="/capstor/store/cscs/swissai/a03/datasets/ego2d/14" --json-file "/users/sstapf/test_data/build-house-Jul-28.json"
@@ -26,5 +26,5 @@ srun python download_dataset.py --output-dir="/capstor/store/cscs/swissai/a03/da
 #srun python download_dataset.py --output-dir="/capstor/store/cscs/swissai/a03/datasets/ego2d/10" --json-file "/users/sstapf/test_data/all_10xx_Jun_29.json"
 
 
-#srun python transform.py
+srun source myenv/bin/activate & python transform.py
 #srun python transform_eval.py

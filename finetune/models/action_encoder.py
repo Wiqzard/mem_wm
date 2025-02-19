@@ -91,7 +91,8 @@ class ActionEncoder(nn.Module):
     Encodes a dictionary of discrete/continuous actions into a sequence of embeddings.
     """
 
-    def __init__(self, hidden_dim=64, out_dim=None, inner_dim=1920, group_size=4):
+    def __init__(self, hidden_dim=64, out_dim=None, inner_dim=1920, group_size=4, 
+    additional_keys=[]):
         """
         Args:
             hidden_dim (int): Size of the output embedding dimension.
@@ -113,6 +114,19 @@ class ActionEncoder(nn.Module):
         self.mouse1_embedding = nn.Embedding(2, hidden_dim)
         self.mouse2_embedding = nn.Embedding(2, hidden_dim)
 
+        self.additional_keys = additional_keys
+        for key in self.additional_keys:
+            setattr(self, f"{key}_embedding", nn.Embedding(2, hidden_dim))
+        
+        if True:
+            self.in_proj = nn.Linear(self.group_size*hidden_dim, self.group_size*hidden_dim)
+            self.transformer_encoder = nn.TransformerEncoder(
+                nn.TransformerEncoderLayer(d_model=self.group_size*hidden_dim, nhead=self.group_size*hidden_dim//64),
+                num_layers=6
+            )
+
+
+
         # MLP for continuous actions (dx, dy)
         def make_mlp(input_dim, hidden_dim):
             return nn.Sequential(
@@ -127,7 +141,7 @@ class ActionEncoder(nn.Module):
 
         # Mask token for missing actions
         mask_dim = hidden_dim * group_size if group_size is not None else hidden_dim * 10
-        self.mask_token = nn.Parameter(torch.randn(1, mask_dim))
+        self.mask_token = nn.Parameter(torch.randn(1, out_dim))
         
 
         #self.discrete_ffn = nn.Linear(4*hidden_dim, out_dim)
@@ -137,6 +151,8 @@ class ActionEncoder(nn.Module):
         if out_dim is not None:
             if group_size is None:
                 self.final_ffn = nn.Linear(hidden_dim * 10, out_dim)
+            #elif hasattr(self, "transformer_encoder"):
+            #    self.final_ffn = nn.Linear(inner_dim, out_dim)
             else:
                 self.final_ffn = nn.Linear(hidden_dim * group_size, out_dim)
                 #self.final_ffn = nn.Linear(hidden_dim * group_size, out_dim)
@@ -220,6 +236,8 @@ class ActionEncoder(nn.Module):
             - If group_size = l:      (B, (T//l)*10, l*hidden_dim)
         """
         B, T = actions["space"].shape
+        if uc:
+            return self.mask_token.unsqueeze(0).repeat(B, 226, 1)
 
         # -----------------------------------------------------
         # 1) W, A, S, D embeddings (binary: 0 or 1)
@@ -234,6 +252,12 @@ class ActionEncoder(nn.Module):
         a_emb = self.a_embedding(actions["a"].long())  # (B, T, hidden_dim)
         s_emb = self.s_embedding(actions["s"].long())  # (B, T, hidden_dim)
         d_emb = self.d_embedding(actions["d"].long())  # (B, T, hidden_dim)
+
+        additional_embs = []
+        for key in self.additional_keys:
+            emb = getattr(self, f"{key}_embedding")
+            additional_embs.append(emb(actions[key].long()))
+            
 
         #e_emb = self.e_embedding(actions["e"].long())  # (B, T, hidden_dim)
         #dwheel_emb = self.dwheel_embedding(actions["dwheel"].long())  # (B, T, hidden_dim)
@@ -261,13 +285,14 @@ class ActionEncoder(nn.Module):
 
         all_per_frame = [
             w_emb, a_emb, s_emb, d_emb, space_emb, shift_emb,
-            dx_emb, dy_emb, mouse1_emb, mouse2_emb
+            dx_emb, dy_emb, mouse1_emb, mouse2_emb, *additional_embs
         ]
 
+        num_keys = len(all_per_frame)
         if False:
             all_discrete = torch.cat([w_emb, a_emb, s_emb, d_emb, space_emb, shift_emb, mouse1_emb, mouse2_emb], dim=1)
             out_stacked = add_sinusoidal_positional_encoding(all_discrete, all_discrete.shape[-1]).to(all_discrete.dtype)
-            out_seq = rearrange(out_stacked, 'b (t g) c -> b t (g c)', g=self.group_size, t=T*8//self.group_size)
+            out_seq = rearrange(out_stacked, 'b (t g) c -> b t (g c)', g=self.group_size, t=T*num_keys//self.group_size)
             discrete_seq = self.pad_sequence_with_mask_token(out_seq, sequence_length) # (B, sequence_length, 8*hidden_dim)
             discrete_seq = self.discrete_ffn(discrete_seq)
 
@@ -288,10 +313,16 @@ class ActionEncoder(nn.Module):
             out_stacked = torch.cat(all_per_frame, dim=1) # (b, t*10, self.hidden_dim)
             out_seq = add_sinusoidal_positional_encoding(out_stacked, out_stacked.shape[-1])
             out_seq = out_seq.to(out_stacked.dtype)
-            out_seq = rearrange(out_seq, 'b (t g) c -> b t (g c)', g=self.group_size, t=T*10//self.group_size)
+            out_seq = rearrange(out_seq, 'b (t g) c -> b t (g c)', g=self.group_size, t=T*num_keys//self.group_size)
+            
+            if hasattr(self, "transformer_encoder"):
+                out_seq = self.in_proj(out_seq)
+                out_seq = self.transformer_encoder(out_seq)
+
+            out_seq = self.final_ffn(out_seq)
+
             if sequence_length is not None and out_seq.shape[1] < sequence_length:
                 out_seq = self.pad_sequence_with_mask_token(out_seq, sequence_length) # (B, sequence_length, 10*hidden_dim)
-            out_seq = self.final_ffn(out_seq)
             return out_seq
             
         out_stacked = torch.cat(all_per_frame, dim=2) # (B, T, 10 * self.hidden_dim)
@@ -349,9 +380,13 @@ class ActionEncoder(nn.Module):
         """
         Returns a dummy input for the model.
         """
-        # just w
-        wasd = torch.zeros(batch_size, num_frames, 4).float()
-        wasd[:, :, 1] = 1
+        w = torch.zeros(batch_size, num_frames)
+        a = torch.zeros(batch_size, num_frames)
+        s = torch.zeros(batch_size, num_frames)
+        d = torch.zeros(batch_size, num_frames)
+        e = torch.zeros(batch_size, num_frames)
+        esc = torch.zeros(batch_size, num_frames)
+        dwheel = torch.zeros(batch_size, num_frames)
         space = torch.zeros(batch_size, num_frames)
         shift = torch.zeros(batch_size, num_frames)
         mouse_1 = torch.zeros(batch_size, num_frames)
@@ -359,7 +394,13 @@ class ActionEncoder(nn.Module):
         dx = torch.zeros(batch_size, num_frames)
         dy = torch.zeros(batch_size, num_frames)
         actions = {
-            "wasd": wasd,
+            "w": w,
+            "a": a,
+            "s": s,
+            "d": d,
+            "e": e,
+            "esc": esc,
+            "dwheel": dwheel,
             "space": space,
             "shift": shift,
             "mouse_1": mouse_1,

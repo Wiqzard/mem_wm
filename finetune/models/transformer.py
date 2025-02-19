@@ -177,7 +177,8 @@ class CogVideoXTransformer3DActionModel(ModelMixin, ConfigMixin, PeftAdapterMixi
                 "embeddings. If you're using a custom model and/or believe this should be supported, please open an "
                 "issue at https://github.com/huggingface/diffusers/issues."
             )
-        self.action_encoder = ActionEncoder(hidden_dim=128, out_dim=text_embed_dim, inner_dim=num_attention_heads*attention_head_dim, group_size=4)
+        self.action_encoder = ActionEncoder(hidden_dim=128, out_dim=text_embed_dim, inner_dim=num_attention_heads*attention_head_dim, group_size=4,
+        additional_keys=["dwheel", "esc", "e"])
         #self.action_encoder = ActionEncoder(hidden_dim=128, out_dim=text_embed_dim, inner_dim=num_attention_heads*attention_head_dim, group_size=4)
         # 1. Patch embedding
         self.patch_embed = CogVideoXPatchEmbed(
@@ -255,7 +256,8 @@ class CogVideoXTransformer3DActionModel(ModelMixin, ConfigMixin, PeftAdapterMixi
         if uc:
             encoded_actions = self.action_encoder(actions, uc=True,  sequence_length=sequence_length)
         else:
-            encoded_actions = self.action_encoder(actions, uc=False, mask_ratio=mask_ratio,  sequence_length=sequence_length)
+            encoded_actions = self.action_encoder(actions, uc=False, sequence_length=sequence_length)
+
 
         return encoded_actions
 
@@ -302,20 +304,20 @@ class CogVideoXTransformer3DActionModel(ModelMixin, ConfigMixin, PeftAdapterMixi
             ofs_emb = self.ofs_embedding(ofs_emb)
             emb = emb + ofs_emb
 
-        encoded_actions = self.encode_actions(
-           actions, uc=uc, device=hidden_states.device, dtype=hidden_states.dtype, cfg=cfg, mask_ratio=mask_ratio
-        )
+        #encoded_actions = self.encode_actions(
+        #   actions, uc=uc, device=hidden_states.device, dtype=hidden_states.dtype, cfg=cfg, mask_ratio=mask_ratio
+        #)
+        #if False:
+        #    encoded_actions, continuous_actions  = self.encode_actions(
+        #        actions, uc=uc, device=hidden_states.device, dtype=hidden_states.dtype, cfg=cfg, mask_ratio=mask_ratio
+        #    )
 
-        if False:
-            encoded_actions, continuous_actions  = self.encode_actions(
-                actions, uc=uc, device=hidden_states.device, dtype=hidden_states.dtype, cfg=cfg, mask_ratio=mask_ratio
-            )
-
-        if encoder_hidden_states is not None:
-            encoder_hidden_states = torch.cat([encoder_hidden_states, encoded_actions], dim=1)
-            assert encoder_hidden_states.shape[1] == self.max_text_seq_length
-        else:
-            encoder_hidden_states = encoded_actions
+        #assert encoder_hidden_states.shape[1] == self.max_text_seq_length, f"{encoder_hidden_states.shape[1]} != {self.max_text_seq_length}"
+        #if encoder_hidden_states is not None:
+        #    encoder_hidden_states = torch.cat([encoder_hidden_states, encoded_actions], dim=1)
+        #    assert encoder_hidden_states.shape[1] == self.max_text_seq_length
+        #else:
+        #    encoder_hidden_states = encoded_actions
 
         # 2. Patch embedding
         hidden_states = self.patch_embed(encoder_hidden_states, hidden_states)
@@ -624,7 +626,8 @@ config_50m = {
     "use_rotary_positional_embeddings": False,
     "in_channels": 32,
     "out_channels": 16,
-    "patch_size": 2,
+    "patch_size": 8, #2,
+    "patch_size_t": 4,
     "max_text_seq_length": 226,
     "text_embed_dim": 768,     
     "time_embed_dim": 256,     

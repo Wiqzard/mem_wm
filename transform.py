@@ -80,6 +80,22 @@ def read_and_filter_actions(jsonl_path):
             actions.append(filtered)
     return actions
 
+def accumulate_actions(actions, reduction_factor):
+    """
+    Accumulates actions over `reduction_factor` frames. Adds dx,dy and puts the 
+    keys into a set, for reduction_factor frames.
+    """
+    for i in range(1, len(actions)):
+        #print(actions[i])
+        if i % reduction_factor == 0:
+            for j in range(1, reduction_factor):
+                actions[i]["dx"] += actions[i - j]["dx"]
+                actions[i]["dy"] += actions[i - j]["dy"]
+                actions[i]["dwheel"] += actions[i - j]["dwheel"]
+                actions[i]["buttons"] = list(set(actions[i]["buttons"]).union(set(actions[i - j]["buttons"])))
+                actions[i]["keys"] = list(set(actions[i]["keys"]).union(set(actions[i - j]["keys"])))
+    return actions[::reduction_factor]
+
 def split_video_and_actions(
     video_path,
     jsonl_path,
@@ -97,6 +113,9 @@ def split_video_and_actions(
     # 1) Read & filter actions
     actions = read_and_filter_actions(jsonl_path)
     total_frames = len(actions) + 1
+    if total_frames < 200:
+        print(f"Skipping video {video_path} with {total_frames} frames.")
+        return
 
     # 2) Check video metadata with OpenCV
     cap = cv2.VideoCapture(video_path)
@@ -128,7 +147,19 @@ def split_video_and_actions(
         full_json_path = os.path.join(meta_out_dir, f"{base_name}_full.json")
         full_frame_path = os.path.join(frames_out_dir, f"{base_name}_full.png")
         
-        shutil.copy(video_path, full_video_path)
+        reduction_factor = 2
+        if reduction_factor > 1:
+            actions = accumulate_actions(actions, reduction_factor)
+            video_clip = VideoFileClip(video_path)
+            video_clip.write_videofile(
+                full_video_path,
+                fps=original_fps // reduction_factor,
+                audio=False,
+                threads=1,
+                logger=None
+            )
+        else:
+            shutil.copy(video_path, full_video_path)
         
         with open(full_json_path, 'w', encoding='utf-8') as jf:
             json.dump({"actions": actions}, jf, indent=2)
@@ -213,122 +244,6 @@ def split_video_and_actions(
     return result_triples
 
 
-#def split_video_and_actions(
-#    video_path,
-#    jsonl_path,
-#    output_dir,
-#    chunk_size,
-#    desired_fps=None,
-#    postfix = ""
-#):
-#    """
-#    Splits the video into chunks of size `chunk_size` frames (as .mp4).
-#    Discards the last chunk if incomplete.
-#
-#    Returns a list of (chunk_video_path, chunk_metadata_path, chunk_image_path).
-#    """
-#    # 1) Read & filter actions
-#    actions = read_and_filter_actions(jsonl_path)
-#    total_frames = len(actions) + 1
-#
-#    # 2) Check video metadata with OpenCV
-#    cap = cv2.VideoCapture(video_path)
-#    if not cap.isOpened():
-#        raise RuntimeError(f"Failed to open video: {video_path}")
-#
-#    original_fps = cap.get(cv2.CAP_PROP_FPS)
-#    total_video_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-#    cap.release()
-#
-#    if total_frames != total_video_frames:
-#        raise ValueError(
-#            f"Frame count mismatch for {os.path.basename(video_path)}:\n"
-#            f"  .jsonl lines: {total_frames} vs. Video frames: {total_video_frames}"
-#        )
-#
-#    # 3) Number of chunks (discard incomplete last chunk)
-#
-#    if chunk_size <= 0:
-#        raise ValueError("chunk_size must be > 0")
-#    num_chunks = total_frames // chunk_size
-#
-#    # 4) Prepare output dirs
-#    videos_out_dir = os.path.join(output_dir, "videos" + postfix)
-#    meta_out_dir = os.path.join(output_dir, "metadata" + postfix)
-#    frames_out_dir = os.path.join(output_dir, "first_frames" + postfix)
-#
-#    os.makedirs(videos_out_dir, exist_ok=True)
-#    os.makedirs(meta_out_dir, exist_ok=True)
-#    os.makedirs(frames_out_dir, exist_ok=True)
-#
-#    base_name = os.path.splitext(os.path.basename(video_path))[0]
-#
-#    result_triples = []
-#
-#    # 5) Use MoviePy to extract subclips
-#    video_clip = VideoFileClip(video_path)
-#    out_fps = desired_fps if desired_fps else original_fps
-#
-#    for i in range(num_chunks):
-#        chunk_index = i + 1
-#        start_frame = i * chunk_size
-#        end_frame = start_frame + chunk_size
-#
-#        chunk_actions = actions[start_frame:end_frame]
-#
-#        # Convert frames -> seconds for subclip
-#        start_sec = start_frame / original_fps
-#        end_sec = end_frame / original_fps 
-#
-#        # Extract subclip
-#        chunk_clip = video_clip.subclip(start_sec, end_sec)
-#
-#        # Paths for output
-#        chunk_video_name = f"{base_name}_chunk_{chunk_index}.mp4"
-#        chunk_video_path = os.path.join(videos_out_dir, chunk_video_name)
-#
-#        chunk_json_name = f"{base_name}_chunk_{chunk_index}.json"
-#        chunk_json_path = os.path.join(meta_out_dir, chunk_json_name)
-#
-#        # Write subclip
-#        chunk_clip.write_videofile(
-#            chunk_video_path,
-#            fps=out_fps,
-#            #codec="libx264",
-#            #codec="mpeg4", #libx264",
-#            audio=False,  # or True if needed
-#            threads=1,
-#            logger=None
-#        )
-#
-#        # Save metadata
-#        assert chunk_clip.duration == (end_sec - start_sec), f"Duration mismatch for chunk {chunk_index}"
-#        assert len(chunk_actions) == chunk_size, f"Chunk {chunk_index} has {len(chunk_actions)} actions"
-#
-#        chunk_metadata = {"actions": chunk_actions}
-#        with open(chunk_json_path, 'w', encoding='utf-8') as jf:
-#            json.dump(chunk_metadata, jf, indent=2)
-#
-#        # 6) Save the first frame of each chunk
-#        #    The first frame name must match the chunked video name but .png
-#        chunk_first_frame_name = chunk_video_name.replace(".mp4", ".png")
-#        chunk_first_frame_path = os.path.join(frames_out_dir, chunk_first_frame_name)
-#
-#        # t=0 grabs the first frame in that chunk
-#        chunk_clip.save_frame(chunk_first_frame_path, t=0)
-#
-#        # Collect results
-#        result_triples.append(
-#            (chunk_video_path, chunk_json_path, chunk_first_frame_path)
-#        )
-#
-#        # Clean up
-#        chunk_clip.close()
-#
-#    video_clip.close()
-#    return result_triples
-
-
 def process_one_file(video_jsonl_prompt_tuple, output_dir, chunk_size, desired_fps, postfix):
     """
     Given a (video_path, jsonl_path, subfolder_prompt), splits into subclips.
@@ -401,8 +316,17 @@ def main():
     """
     #base_dir = "/data/cvg/sebastian/minecraft_basalt/14"  # Where your raw .mp4 + .jsonl live
     #data_dir = "/data/cvg/sebastian/minecraft_basalt/test_processed2"  # Where subclips + metadata go
-    base_dir = "data/processed_gf"
-    data_dir = "data/processed_gf_3"  # Where subclips + metadata go
+    #base_dir = "data/processed_gf"
+    #data_dir = "data/downsample2"  # Where subclips + metadata go
+
+    #base_dir = "/capstor/store/cscs/swissai/a03/datasets/ego4d_mc/14" #"data/processed_gf"
+    #base_dir = "/capstor/store/cscs/swissai/a03/datasets/ego4d_mc/8" #"data/processed_gf"
+    #base_dir = "/capstor/store/cscs/swissai/a03/datasets/ego4d_mc/13" #"data/processed_gf"
+    #base_dir = "/capstor/store/cscs/swissai/a03/datasets/ego4d_mc/12" #"data/processed_gf"
+    #base_dir = "/capstor/store/cscs/swissai/a03/datasets/ego4d_mc/9" #"data/processed_gf"
+    #base_dir = "/capstor/store/cscs/swissai/a03/datasets/ego4d_mc/11" #"data/processed_gf"
+    base_dir = "/capstor/store/cscs/swissai/a03/datasets/ego4d_mc/10" #"data/processed_gf"
+    data_dir = "/capstor/store/cscs/swissai/a03/datasets/ego4d_mc/processed2"  # Where subclips + metadata go
 
     postfix = "_" + base_dir.split("/")[-1]  # e.g. "14"
 
@@ -413,7 +337,7 @@ def main():
 
     chunk_size = -1 #49  # frames per chunk
     desired_fps = None #10 #None  # e.g. set =16 if you want to re-encode at 16fps
-    n_workers = 1
+    n_workers = 256
 
     # 1) Find .mp4 files
     video_paths = glob.glob(os.path.join(base_dir, "**", "*.mp4"), recursive=True)

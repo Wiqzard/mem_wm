@@ -365,6 +365,9 @@ class I2VDatasetWithActions(I2VDatasetWithResize):
         video_latent_dir.mkdir(parents=True, exist_ok=True)
         encoded_video_path = video_latent_dir / (video.stem + ".safetensors")
         frames, image, start_index = self.preprocess(video, image)
+        print(f"index: {index}")
+        print(f"start_index: {start_index}")
+
         image = self.image_transform(image)
         frames = self.video_transform(frames)
         frames = frames.unsqueeze(0)

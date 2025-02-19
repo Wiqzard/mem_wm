@@ -21,6 +21,7 @@ core_nid*
 ckpts
 *.mp4
 
+myenv
 
 **/*debug*
 **/finetune/*-lora-*

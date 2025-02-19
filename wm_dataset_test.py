@@ -1,3 +1,4 @@
+import decord
 import hashlib
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Tuple
@@ -142,8 +143,16 @@ class WMDataset(Dataset):
         # ----------------
         if self.encode_online:
             frames, image, start_index = self._preprocess(video_path, image_path, random_start=self.random_start, num_frames=num_frames)
-            #print(f"index: {index}")
-            #print(f"start_index: {start_index}")
+
+            # save video to file "video.mp4"
+            #import imageio
+            #import numpy as np
+            #fps = 16
+            #writer = imageio.get_writer("video.mp4", fps=fps, codec="libx264")
+            #for frame in frames:
+            #    if not isinstance(frame, np.ndarray):
+            #        frame = frame.numpy().transpose(1, 2, 0)  # Convert Decord frame to NumPy array if needed
+            #    writer.append_data(frame)
 
             image = self.image_transform(image)
             frames = self.video_transform(frames)
@@ -272,14 +281,14 @@ class WMDataset(Dataset):
 
 if __name__ == "__main__":
     wm_datset = WMDataset(
-        data_root="data_test/post",
-        video_column="videos.txt",
-        image_column="images.txt",
-        height=256,
-        width=256,
-        max_num_frames=18,
+        data_root="/capstor/store/cscs/swissai/a03/datasets/ego4d_mc/processed/train_set/",
+        video_column="videos_train_gf_processed.txt",
+        image_column="images_train_gf_processed.txt",
+        height=360, #256,
+        width=480, #256,
+        max_num_frames=49,
         encode_online=True
     )
 
-    print(wm_datset[0])
-    print(wm_datset[1])
+    a = wm_datset[0]
+    #print(wm_datset[1])

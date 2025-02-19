@@ -42,6 +42,7 @@ from finetune.datasets.utils import (
     load_actions_as_tensors,
     preprocess_image_with_resize,
     preprocess_video_with_resize,
+    preprocess_video_with_resize_wm,
     format_action_string
 )
 from finetune.schemas import Args, Components, State
@@ -57,7 +58,41 @@ from finetune.utils import (
     unwrap_model,
 )
 import torch.distributed as dist
+import numpy as np
 
+def compute_mse(gt_frames, pred_frames):
+    """
+    Compute mean squared error between two lists of PIL images.
+
+    Args:
+        gt_frames (List[PIL.Image.Image]): Ground-truth frames
+        pred_frames (List[PIL.Image.Image]): Predicted frames
+
+    Returns:
+        float: MSE value (averaged over frames, in the range [0,1]^2)
+    """
+    if gt_frames is None or pred_frames is None:
+        return None
+
+    length = min(len(gt_frames), len(pred_frames))
+    if length == 0:
+        return None
+
+    total_mse = 0.0
+    for i in range(length):
+        # Convert PIL Image -> NumPy -> Torch
+        gt_tensor = torch.from_numpy(np.array(gt_frames[i], dtype=np.float32))
+        pred_tensor = torch.from_numpy(np.array(pred_frames[i], dtype=np.float32))
+
+        # (H, W, C) -> (C, H, W); scale to [0,1]
+        gt_tensor = gt_tensor.permute(2, 0, 1) / 255.0
+        pred_tensor = pred_tensor.permute(2, 0, 1) / 255.0
+
+        # Per-frame MSE
+        frame_mse = torch.mean((gt_tensor - pred_tensor) ** 2).item()
+        total_mse += frame_mse
+
+    return total_mse / length
 
 def worker_init_fn(worker_id):
     # Ensure each worker gets a different seed
@@ -137,6 +172,8 @@ class Trainer:
 
         #if self.args.seed is not None:
         set_seed(self.args.seed + accelerator.process_index)
+        np.random.seed(self.args.seed + accelerator.process_index)
+        random.seed(self.args.seed + accelerator.process_index)
         #    set_seed(self.args.seed)
 
     def _init_logging(self) -> None:
@@ -413,6 +450,7 @@ class Trainer:
     def prepare_for_validation(self):
         validation_prompts = load_prompts(self.args.validation_dir / self.args.validation_prompts)
 
+        
         if self.args.validation_images is not None:
             validation_images = load_images(self.args.validation_dir / self.args.validation_images)
         else:
@@ -420,6 +458,8 @@ class Trainer:
 
         if self.args.validation_videos is not None:
             validation_videos = load_videos(self.args.validation_dir / self.args.validation_videos)
+
+
         else:
             validation_videos = [None] * len(validation_prompts)
 
@@ -430,6 +470,9 @@ class Trainer:
         else:
             validation_actions = [None] * len(validation_prompts)
 
+        paired_data = list(zip(validation_prompts, validation_images, validation_videos, validation_actions))
+        random.shuffle(paired_data)
+        validation_prompts, validation_images, validation_videos, validation_actions = map(list, zip(*paired_data))
         self.state.validation_prompts = validation_prompts
         self.state.validation_images = validation_images
         self.state.validation_videos = validation_videos
@@ -543,7 +586,7 @@ class Trainer:
                 should_run_validation = (
                     self.args.do_validation and global_step % self.args.validation_steps == 0
                 )
-                if should_run_validation:
+                if should_run_validation: # and accelerator.is_main_process:
                     del loss
                     free_memory()
                     self.validate(global_step)
@@ -582,8 +625,6 @@ class Trainer:
             return
 
         self.components.transformer.eval()
-        # if self.components.action_encoder is not None:
-        #     self.components.action_encoder.eval()
         torch.set_grad_enabled(False)
 
         memory_statistics = get_memory_statistics()
@@ -593,62 +634,69 @@ class Trainer:
         pipe = self.initialize_pipeline()
 
         if self.state.using_deepspeed:
-            # Can't using model_cpu_offload in deepspeed,
-            # so we need to move all components in pipe to device
-            # pipe.to(self.accelerator.device, dtype=self.state.weight_dtype)
+            # Move all necessary components to device if using Deepspeed
             self.__move_components_to_device(
                 dtype=self.state.weight_dtype, ignore_list=["transformer", ]
             )
         else:
-            # if not using deepspeed, use model_cpu_offload to further reduce memory usage
+            # if not using deepspeed, use CPU offload
             pipe.enable_model_cpu_offload(device=self.accelerator.device)
-            # Convert all model weights to training dtype
             pipe = pipe.to(dtype=self.state.weight_dtype)
-
         #################################
 
         all_processes_artifacts = []
+
+        ### ADDED: We'll accumulate MSE values in a list
+        mse_values = []
+
         for i in range(min(8, num_validation_samples - 1)):
-            # j = random.randint(0, num_validation_samples - 1)
+            j = random.randint(0, num_validation_samples - 1)
             if self.state.using_deepspeed and self.accelerator.deepspeed_plugin.zero_stage != 3:
-                # Skip current validation on all processes but one
+                # Skip current validation on non-selected processes
                 if i % accelerator.num_processes != accelerator.process_index:
                     continue
 
-            prompt = self.state.validation_prompts[i]
-            image = self.state.validation_images[i]
-            video = self.state.validation_videos[i]      # Ground truth video if available
-            action = self.state.validation_actions[i]
+            # Prepare prompt, image, video, action for validation sample
+            prompt = self.state.validation_prompts[j]
+            image = self.state.validation_images[j]
+            video = self.state.validation_videos[j]      # Ground truth video if available
+            action = self.state.validation_actions[j]
 
             if image is not None:
                 image = preprocess_image_with_resize(
                     image, self.state.train_height, self.state.train_width
                 )
-                # Convert image tensor (C, H, W) to PIL image
+                # Convert image tensor (C, H, W) -> PIL
                 image = image.to(torch.uint8)
                 image = image.permute(1, 2, 0).cpu().numpy()
                 image = Image.fromarray(image)
 
             if video is not None:
-                video = preprocess_video_with_resize(
-                    video, self.state.train_frames, self.state.train_height, self.state.train_width
+                video, image, start_index = preprocess_video_with_resize_wm(
+                    video, self.state.train_frames, self.state.train_height, self.state.train_width, random_start=True
                 )
-                # Convert video tensor (F, C, H, W) to list of PIL images
                 video = video.round().clamp(0, 255).to(torch.uint8)
+                # Convert frames -> list of PIL images
                 video = [Image.fromarray(frame.permute(1, 2, 0).cpu().numpy()) for frame in video]
+                image = Image.fromarray(image.permute(1, 2, 0).cpu().numpy().astype(np.uint8))
 
             if action is not None:
-                action = load_actions_as_tensors(action, num_actions=self.state.train_frames - 1)
+                action = load_actions_as_tensors(action, num_actions=self.state.train_frames - 1, start_index=start_index)
                 action_string = format_action_string(action)
+            else:
+                action_string = None
 
             logger.debug(
                 f"Validating sample {i + 1}/{num_validation_samples} on process {accelerator.process_index}. Prompt: {prompt}",
                 main_process_only=False,
             )
+
+            # Run the validation step (generates predicted video/artifacts)
             validation_artifacts = self.validation_step(
                 {"prompt": prompt, "image": image, "video": video, "actions": action}, pipe
             )
 
+            # Deepspeed Zero-3 steps
             if (
                 self.state.using_deepspeed
                 and self.accelerator.deepspeed_plugin.zero_stage == 3
@@ -656,27 +704,26 @@ class Trainer:
             ):
                 continue
 
+            # Prepare to log the artifacts
             prompt_filename = string_to_filename(prompt)[:25]
-            # Calculate hash of reversed prompt as a unique identifier
             reversed_prompt = prompt[::-1]
             hash_suffix = hashlib.md5(reversed_prompt.encode()).hexdigest()[:5]
 
-            # Here we keep the original image for reference, 
-            # and we add an explicit "video_ground_truth" artifact if a GT video is present.
-            # -----------------------------------------------------------
             artifacts = {
                 "image": {"type": "image", "value": image},
             }
-            # ADDED: Store ground-truth video under a more explicit key
+
+            # Also store the ground-truth video (if it exists)
             if video is not None:
                 artifacts["video_ground_truth"] = {
-                    "type": "video", 
-                    "value": video, 
+                    "type": "video",
+                    "value": video,
                     "caption": "Ground Truth"
                 }
-            # -----------------------------------------------------------
 
-            # Now include the newly generated artifacts (e.g., predicted video) returned by validation_step
+            # The validation step typically returns something like:
+            #   [("video", predicted_video_frames), ...]
+            # so we store them into `artifacts`
             for idx, (artifact_type, artifact_value) in enumerate(validation_artifacts):
                 artifacts[f"artifact_{idx}"] = {"type": artifact_type, "value": artifact_value}
 
@@ -685,7 +732,27 @@ class Trainer:
                 main_process_only=False,
             )
 
-            # For each artifact (GT video, predicted video(s), or image), save and convert to W&B artifact
+            # For each artifact, convert to W&B artifacts or video files
+            # But before we do that, we can also compute MSE if we have GT + predicted
+            gt_frames = artifacts.get("video_ground_truth", {}).get("value", None)
+            
+            ### ADDED: Find the first predicted "video" artifact to compute MSE
+            pred_frames = None
+            for k, v in artifacts.items():
+                # A typical key might be "artifact_0" with "type"="video"
+                # If your `validation_step` returns a single predicted video,
+                # you can break right after finding the first.
+                if v["type"] == "video" and k != "video_ground_truth":
+                    pred_frames = v["value"]
+                    break
+            
+            # Compute MSE if both exist
+            if gt_frames is not None and pred_frames is not None:
+                sample_mse = compute_mse(gt_frames, pred_frames)
+                if sample_mse is not None:
+                    mse_values.append(sample_mse)
+
+            # Now proceed with saving the artifacts
             for key, value in list(artifacts.items()):
                 artifact_type = value["type"]
                 artifact_value = value["value"]
@@ -715,8 +782,11 @@ class Trainer:
                 # Collect W&B artifact objects for gather
                 all_processes_artifacts.append(artifact_value)
 
-        # Gather all artifacts across processes
+        # Gather all W&B artifacts across processes
         all_artifacts = gather_object(all_processes_artifacts)
+
+        # Gather MSE values across processes
+        all_mse_values = gather_object(mse_values)
 
         if accelerator.is_main_process:
             tracker_key = "validation"
@@ -728,13 +798,23 @@ class Trainer:
                     video_artifacts = [
                         artifact for artifact in all_artifacts if isinstance(artifact, wandb.Video)
                     ]
-                    # Log them all, including ground-truth videos
+
+                    # Log images/videos
                     tracker.log(
                         {
-                            tracker_key: {"images": image_artifacts, "videos": video_artifacts},
+                            tracker_key: {
+                                "images": image_artifacts,
+                                "videos": video_artifacts,
+                            },
                         },
                         step=step,
                     )
+
+                    ### ADDED: Log the average MSE
+                    if len(all_mse_values) > 0:
+                        avg_mse = sum(all_mse_values) / len(all_mse_values)
+                        tracker.log({"validation/avg_mse": avg_mse}, step=step)
+                        logger.info(f"Validation MSE (step={step}): {avg_mse}")
 
         ##########  Clean up  ##########
         if self.state.using_deepspeed:
@@ -744,11 +824,9 @@ class Trainer:
         else:
             pipe.remove_all_hooks()
             del pipe
-            # Load models except those not needed for training
+            # Reload needed models
             self.__move_components_to_device(dtype=self.state.weight_dtype, ignore_list=self.UNLOAD_LIST)
             self.components.transformer.to(self.accelerator.device, dtype=self.state.weight_dtype)
-
-            # Change trainable weights back to fp32 to keep with dtype after prepare the model
             cast_training_params([self.components.transformer], dtype=torch.float32)
 
         free_memory()
@@ -762,6 +840,213 @@ class Trainer:
         torch.set_grad_enabled(True)
         self.components.transformer.train()
 
+
+#    def validate(self, step: int) -> None:
+#        logger.info("Starting validation")
+#
+#        accelerator = self.accelerator
+#        num_validation_samples = len(self.state.validation_prompts)
+#
+#        if num_validation_samples == 0:
+#            logger.warning("No validation samples found. Skipping validation.")
+#            return
+#
+#        self.components.transformer.eval()
+#        # if self.components.action_encoder is not None:
+#        #     self.components.action_encoder.eval()
+#        torch.set_grad_enabled(False)
+#
+#        memory_statistics = get_memory_statistics()
+#        logger.info(f"Memory before validation start: {json.dumps(memory_statistics, indent=4)}")
+#
+#        #####  Initialize pipeline  #####
+#        pipe = self.initialize_pipeline()
+#
+#        if self.state.using_deepspeed:
+#            # Can't using model_cpu_offload in deepspeed,
+#            # so we need to move all components in pipe to device
+#            # pipe.to(self.accelerator.device, dtype=self.state.weight_dtype)
+#            self.__move_components_to_device(
+#                dtype=self.state.weight_dtype, ignore_list=["transformer", ]
+#            )
+#        else:
+#            # if not using deepspeed, use model_cpu_offload to further reduce memory usage
+#            pipe.enable_model_cpu_offload(device=self.accelerator.device)
+#            # Convert all model weights to training dtype
+#            pipe = pipe.to(dtype=self.state.weight_dtype)
+#
+#        #################################
+#
+#        all_processes_artifacts = []
+#        for i in range(min(4, num_validation_samples - 1)):
+#            j = random.randint(0, num_validation_samples - 1)
+#            if self.state.using_deepspeed and self.accelerator.deepspeed_plugin.zero_stage != 3:
+#                # Skip current validation on all processes but one
+#                if i % accelerator.num_processes != accelerator.process_index:
+#                    continue
+#            #prompt = self.state.validation_prompts[i]
+#            #image = self.state.validation_images[i]
+#            #video = self.state.validation_videos[i]      # Ground truth video if available
+#            #action = self.state.validation_actions[i]
+#
+#            prompt = self.state.validation_prompts[j]
+#            image = self.state.validation_images[j]
+#            video = self.state.validation_videos[j]      # Ground truth video if available
+#            action = self.state.validation_actions[j]
+#
+#            if image is not None:
+#                image = preprocess_image_with_resize(
+#                    image, self.state.train_height, self.state.train_width
+#                )
+#                # Convert image tensor (C, H, W) to PIL image
+#                image = image.to(torch.uint8)
+#                image = image.permute(1, 2, 0).cpu().numpy()
+#                image = Image.fromarray(image)
+#
+#            if video is not None:
+#                video = preprocess_video_with_resize_wm(
+#                    video, self.state.train_frames, self.state.train_height, self.state.train_width, random_start=True
+#                )[0]
+#                # Convert video tensor (F, C, H, W) to list of PIL images
+#                video = video.round().clamp(0, 255).to(torch.uint8)
+#                # save video to disk
+#                #import imageio
+#                #import numpy as np
+#                #writer = imageio.get_writer(f"video-{j}.mp4", fps=16)
+#                #for frame in video:
+#                    #frame = frame.permute(1, 2, 0).cpu().numpy()
+#                    #writer.append_data(frame)
+#                #writer.close()
+#
+#                video = [Image.fromarray(frame.permute(1, 2, 0).cpu().numpy()) for frame in video]
+#                #video_path = self.args.output_dir / "validation_res" / f"video-{step}-{accelerator.process_index}-{i}.mp4"
+#
+#
+#            if action is not None:
+#                action = load_actions_as_tensors(action, num_actions=self.state.train_frames - 1)
+#                action_string = format_action_string(action)
+#
+#            logger.debug(
+#                f"Validating sample {i + 1}/{num_validation_samples} on process {accelerator.process_index}. Prompt: {prompt}",
+#                main_process_only=False,
+#            )
+#            validation_artifacts = self.validation_step(
+#                {"prompt": prompt, "image": image, "video": video, "actions": action}, pipe
+#            )
+#
+#            if (
+#                self.state.using_deepspeed
+#                and self.accelerator.deepspeed_plugin.zero_stage == 3
+#                and not accelerator.is_main_process
+#            ):
+#                continue
+#
+#            prompt_filename = string_to_filename(prompt)[:25]
+#            # Calculate hash of reversed prompt as a unique identifier
+#            reversed_prompt = prompt[::-1]
+#            hash_suffix = hashlib.md5(reversed_prompt.encode()).hexdigest()[:5]
+#
+#            # Here we keep the original image for reference, 
+#            # and we add an explicit "video_ground_truth" artifact if a GT video is present.
+#            # -----------------------------------------------------------
+#            artifacts = {
+#                "image": {"type": "image", "value": image},
+#            }
+#            # ADDED: Store ground-truth video under a more explicit key
+#            if video is not None:
+#                artifacts["video_ground_truth"] = {
+#                    "type": "video", 
+#                    "value": video, 
+#                    "caption": "Ground Truth"
+#                }
+#            # -----------------------------------------------------------
+#
+#            # Now include the newly generated artifacts (e.g., predicted video) returned by validation_step
+#            for idx, (artifact_type, artifact_value) in enumerate(validation_artifacts):
+#                artifacts[f"artifact_{idx}"] = {"type": artifact_type, "value": artifact_value}
+#
+#            logger.debug(
+#                f"Validation artifacts on process {accelerator.process_index}: {list(artifacts.keys())}",
+#                main_process_only=False,
+#            )
+#
+#            # For each artifact (GT video, predicted video(s), or image), save and convert to W&B artifact
+#            for key, value in list(artifacts.items()):
+#                artifact_type = value["type"]
+#                artifact_value = value["value"]
+#                caption = value.get("caption", None)
+#
+#                if artifact_type not in ["image", "video"] or artifact_value is None:
+#                    continue
+#
+#                extension = "png" if artifact_type == "image" else "mp4"
+#                filename = (
+#                    f"validation-{step}-{accelerator.process_index}-{key}-{hash_suffix}.{extension}"
+#                )
+#                validation_path = self.args.output_dir / "validation_res"
+#                validation_path.mkdir(parents=True, exist_ok=True)
+#                filename = str(validation_path / filename)
+#
+#                if artifact_type == "image":
+#                    logger.debug(f"Saving image to {filename}")
+#                    artifact_value.save(filename)
+#                    artifact_value = wandb.Image(filename)
+#                elif artifact_type == "video":
+#                    logger.debug(f"Saving video to {filename}")
+#                    export_to_video(artifact_value, filename, fps=self.args.gen_fps)
+#                    # Use the caption if provided, otherwise fallback to action_string
+#                    artifact_value = wandb.Video(filename, caption=caption or action_string)
+#
+#                # Collect W&B artifact objects for gather
+#                all_processes_artifacts.append(artifact_value)
+#
+#        # Gather all artifacts across processes
+#        all_artifacts = gather_object(all_processes_artifacts)
+#
+#        if accelerator.is_main_process:
+#            tracker_key = "validation"
+#            for tracker in accelerator.trackers:
+#                if tracker.name == "wandb":
+#                    image_artifacts = [
+#                        artifact for artifact in all_artifacts if isinstance(artifact, wandb.Image)
+#                    ]
+#                    video_artifacts = [
+#                        artifact for artifact in all_artifacts if isinstance(artifact, wandb.Video)
+#                    ]
+#                    # Log them all, including ground-truth videos
+#                    tracker.log(
+#                        {
+#                            tracker_key: {"images": image_artifacts, "videos": video_artifacts},
+#                        },
+#                        step=step,
+#                    )
+#
+#        ##########  Clean up  ##########
+#        if self.state.using_deepspeed:
+#            del pipe
+#            # Unload models except those needed for training
+#            self.__move_components_to_cpu(unload_list=self.UNLOAD_LIST)
+#        else:
+#            pipe.remove_all_hooks()
+#            del pipe
+#            # Load models except those not needed for training
+#            self.__move_components_to_device(dtype=self.state.weight_dtype, ignore_list=self.UNLOAD_LIST)
+#            self.components.transformer.to(self.accelerator.device, dtype=self.state.weight_dtype)
+#
+#            # Change trainable weights back to fp32 to keep with dtype after prepare the model
+#            cast_training_params([self.components.transformer], dtype=torch.float32)
+#
+#        free_memory()
+#        accelerator.wait_for_everyone()
+#        ################################
+#
+#        memory_statistics = get_memory_statistics()
+#        logger.info(f"Memory after validation end: {json.dumps(memory_statistics, indent=4)}")
+#        torch.cuda.reset_peak_memory_stats(accelerator.device)
+#
+#        torch.set_grad_enabled(True)
+#        self.components.transformer.train()
+#
 #    def validate(self, step: int) -> None:
 #        logger.info("Starting validation")
 #

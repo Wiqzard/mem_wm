@@ -240,7 +240,7 @@ class VisualizeResults:
 
         actions = load_actions_as_tensors(
             action_path,
-            num_actions=self.num_frames,
+            num_actions=self.num_frames-1,
         )
         return actions
 
@@ -271,7 +271,9 @@ class VisualizeResults:
             guidance_scale=0.0,
             generator=torch.Generator(device=self.device).manual_seed(seed),
             max_sequence_length=226,
+            return_dict=False,
         )
+        
         generated_frames = video_result.frames[0]  # List of PIL images
         return generated_frames
 
@@ -332,7 +334,7 @@ class VisualizeResults:
             world_size = dist.get_world_size()
 
         # CASE 1: Video-based generation
-        if len(self.video_paths) > 0:
+        if False: #len(self.video_paths) > 0:
             if self.distributed:
                 # Simple chunking approach for distributing videos among ranks
                 chunk_size = (len(self.video_paths) + world_size - 1) // world_size
@@ -406,6 +408,7 @@ class VisualizeResults:
                     else:
                         actions = self._load_actions(m_path)
                     # 3) Generate frames
+                    print(actions)
                     generated_frames = self._generate_video(first_frame, actions, seed=seed)
                 except Exception as e:
                     print(f"[Rank {self.local_rank}] Error: {e}, skipping {f_path}")
@@ -434,14 +437,14 @@ if __name__ == "__main__":
 
     seq_lr = [{"actions" : generate_action_sequence(48, "left-right")}]
     model_path = "THUDM/CogVideoX-2b" #"THUDM/CogVideoX1.5-5B-I2V" #"THUDM/CogVideoX-2b"  # For example
-    transformer_local_path = "/capstor/scratch/cscs/sstapf/mem_wm/finetune/outputs/outputs_2_hlr_49_cont/checkpoint-2000" # If you have a custom local path for the transformer, set it here"/capstor/scratch/cscs/sstapf/mem_wm/finetune/outputs/outputs_1.5_hlr_cont/checkpoint-3600" #
-    video_dir = "/capstor/store/cscs/swissai/a03/datasets/ego4d_mc/validation_set/videos" # None           #video_dir = "/capstor/store/cscs/swissai/a03/datasets/ego4d_mc/validation_set/videos"  # Path to a directory containing .mp4 files
+    transformer_local_path = "/capstor/scratch/cscs/sstapf/mem_wm/finetune/outputs/basalt_10_fps_actions_full_res/checkpoint-5800" #"/capstor/scratch/cscs/sstapf/mem_wm/finetune/outputs/outputs_2_hlr_49_cont/checkpoint-2000" # If you have a custom local path for the transformer, set it here"/capstor/scratch/cscs/sstapf/mem_wm/finetune/outputs/outputs_1.5_hlr_cont/checkpoint-3600" #
+    video_dir = "/capstor/store/cscs/swissai/a03/datasets/ego4d_mc/processed2/test_set/videos_8" # None           #video_dir = "/capstor/store/cscs/swissai/a03/datasets/ego4d_mc/validation_set/videos"  # Path to a directory containing .mp4 files
     video_list_file = None
-    frames_path = None #"/capstor/scratch/cscs/sstapf/mem_wm/data/data_269/first_frames/seed_451_part_451.png" #None         # E.g. "/path/to/single_frame.png"
+    frames_path = None #"/capstor/store/cscs/swissai/a03/datasets/ego4d_mc/processed2/test_set/images_test_combined.txt" #None #"/capstor/scratch/cscs/sstapf/mem_wm/data/data_269/first_frames/seed_451_part_451.png" #None         # E.g. "/path/to/single_frame.png"
     frames_list = None         # E.g. ["frame1.png", "frame2.png"]
     metadata_path = seq_lr #None       # E.g. "/path/to/actions.json"
     metadata_list = None       # E.g. ["actions1.json", "actions2.json"]
-    output_dir = "samples_output"
+    output_dir = "samples_output_action_transformer_lr"
     device = "cuda"
     dtype = torch.bfloat16
     distributed = False
@@ -470,5 +473,6 @@ if __name__ == "__main__":
         dtype=dtype,
         distributed=distributed,
     )
+    print(0)
     vis.run(seed=seed)
 
